@@ -1,7 +1,7 @@
 {
   "name": "pdf-compiler-free",
   "private": true,
-  "homepage": "https://github.com/jordan1982/pdf-compiler-free.git",
+  "homepage": "https://github.com/jordan1982/pdf-compiler-free",
   "version": "0.0.0",
   "type": "module",
   "scripts": {
