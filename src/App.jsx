@@ -1,17 +1,22 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
 import * as pdfjsLib from 'pdfjs-dist';
-import { FileText, Download, AlertCircle, Plus, Keyboard, Info } from 'lucide-react';
+import { FileText, AlertCircle, Keyboard } from 'lucide-react';
 
-import { clamp, getPointerPos, CAP_HEIGHT_RATIO } from './utils';
+import { clamp, getPointerPos } from './utils';
+import { useHistory } from './utils/history';
+import { buildPdf } from './services/pdfExporter';
+
+import AppHeader from './components/AppHeader';
+import DocumentCanvas from './components/DocumentCanvas';
+import FieldSection from './components/FieldSection';
+import SignatureSection from './components/SignatureSection';
+import ExportActions from './components/ExportActions';
 import PageToolbar from './components/PageToolbar';
-import FieldOverlay from './components/Fieldoverlay';
-import SignatureOverlay from './components/SignatureOverlay';
-import SignatureSlot from './components/SignatureSlot';
-import FieldRow from './components/Fieldrow';
 import WelcomePage from './components/WelcomePage';
 
 const SIG_PREFIX = 'sig_';
+const SNAP_THRESHOLD = 1.5;
+
 const makeSignature = (page) => ({
   id: `${SIG_PREFIX}${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
   dataUrl: null,
@@ -20,14 +25,6 @@ const makeSignature = (page) => ({
   y: 82,
   widthPct: 22,
 });
-
-const hexToRgb = (hex) => {
-  const cleanHex = (hex || '#000000').replace('#', '');
-  const r = parseInt(cleanHex.substring(0, 2), 16) / 255 || 0;
-  const g = parseInt(cleanHex.substring(2, 4), 16) / 255 || 0;
-  const b = parseInt(cleanHex.substring(4, 6), 16) / 255 || 0;
-  return rgb(r, g, b);
-};
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
@@ -42,14 +39,51 @@ export default function App() {
   const [isLoadingPdf, setIsLoadingPdf] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isDesktop, setIsDesktop] = useState(false);
-
   const [zoomLevel, setZoomLevel] = useState(1.4);
 
-  const [fields, setFields] = useState([
-    { id: 'data', label: 'Data', page: 1, x: 10, y: 85, value: new Date().toISOString().slice(0, 10), fontSize: 10, bold: false, italic: false, underline: false, color: '#000000' },
+  // Gestione Profilo Firmatario (con persistenza localStorage)
+  const [signerInfo, setSignerInfo] = useState(() => {
+    try {
+      const saved = localStorage.getItem('pdf_signer_info');
+      return saved ? JSON.parse(saved) : { nome: '', cognome: '', cf: '', email: '' };
+    } catch {
+      return { nome: '', cognome: '', cf: '', email: '' };
+    }
+  });
+
+  const handleSaveSignerInfo = (newInfo) => {
+    setSignerInfo(newInfo);
+    localStorage.setItem('pdf_signer_info', JSON.stringify(newInfo));
+  };
+
+  const [fields, setFields, undoFields, redoFields, canUndo, canRedo] = useHistory([
+    {
+      id: 'data',
+      label: 'Data',
+      page: 1,
+      x: 10,
+      y: 85,
+      value: new Date().toISOString().slice(0, 10),
+      fontSize: 10,
+      bold: false,
+      italic: false,
+      underline: false,
+      color: '#000000',
+    },
   ]);
+
   const [newFieldName, setNewFieldName] = useState('');
   const [signatures, setSignatures] = useState([makeSignature(1)]);
+  const [copiedElement, setCopiedElement] = useState(null);
+  const [snapLines, setSnapLines] = useState({ x: null, y: null });
+
+  const [savedSignatures, setSavedSignatures] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem('pdf_saved_signatures')) || [];
+    } catch {
+      return [];
+    }
+  });
 
   const [draggingId, setDraggingId] = useState(null);
   const [resizingId, setResizingId] = useState(null);
@@ -57,10 +91,22 @@ export default function App() {
   const pageRef = useRef(null);
   const [renderedPageWidth, setRenderedPageWidth] = useState(0);
 
+  const PrivacyNotice = () => (
+  <div className="bg-emerald-50/80 border border-emerald-200/80 text-emerald-900 px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-2 mb-4 shadow-sm">
+    <span className="text-base flex-shrink-0">🔒</span>
+    <p className="leading-snug">
+      <strong>Privacy garantita:</strong> I dati del profilo e le firme sono salvati esclusivamente nella memoria locale del tuo browser (<code className="text-emerald-700 font-mono">localStorage</code>). Nessun dato viene inviato a server esterni.
+    </p>
+  </div>
+);
+
   useEffect(() => {
-    // Rileva se il dispositivo supporta il puntatore di precisione (Mouse / Desktop)
     setIsDesktop(window.matchMedia('(pointer: fine)').matches);
   }, []);
+
+  useEffect(() => {
+    localStorage.setItem('pdf_saved_signatures', JSON.stringify(savedSignatures));
+  }, [savedSignatures]);
 
   useEffect(() => {
     const el = pageRef.current;
@@ -72,15 +118,79 @@ export default function App() {
     return () => ro.disconnect();
   }, [pageImages, currentPage]);
 
-  /* ---- Spostamento Tastiera ---- */
+  /* Scorciatoie da tastiera completi */
   useEffect(() => {
     const onKeyDown = (e) => {
-      if (!selectedId) return;
-      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
-      if (!['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) return;
-      
+      const isInput = ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName);
+      if (isInput) return;
+
+      // 1. Undo / Redo
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) redoFields();
+        else undoFields();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+        e.preventDefault();
+        redoFields();
+        return;
+      }
+
+      // 2. Cancellazione con CANC o BACKSPACE
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId) {
+        e.preventDefault();
+        if (selectedId.startsWith(SIG_PREFIX)) {
+          removeSignature(selectedId);
+        } else {
+          removeField(selectedId);
+        }
+        return;
+      }
+
+      // 3. Copia (Ctrl+C / Cmd+C)
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c' && selectedId) {
+        e.preventDefault();
+        if (selectedId.startsWith(SIG_PREFIX)) {
+          const sig = signatures.find((s) => s.id === selectedId);
+          if (sig) setCopiedElement({ type: 'signature', data: sig });
+        } else {
+          const field = fields.find((f) => f.id === selectedId);
+          if (field) setCopiedElement({ type: 'field', data: field });
+        }
+        return;
+      }
+
+      // 4. Incolla (Ctrl+V / Cmd+V)
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v' && copiedElement) {
+        e.preventDefault();
+        if (copiedElement.type === 'field') {
+          const copy = {
+            ...copiedElement.data,
+            id: `f_${Date.now()}`,
+            x: clamp(copiedElement.data.x + 3, 0, 100),
+            y: clamp(copiedElement.data.y + 3, 0, 100),
+          };
+          setFields([...fields, copy]);
+          setSelectedId(copy.id);
+        } else if (copiedElement.type === 'signature') {
+          const copy = {
+            ...copiedElement.data,
+            id: `${SIG_PREFIX}${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+            x: clamp(copiedElement.data.x + 3, 0, 100),
+            y: clamp(copiedElement.data.y + 3, 0, 100),
+          };
+          setSignatures((prev) => [...prev, copy]);
+          setSelectedId(copy.id);
+        }
+        return;
+      }
+
+      // 5. Spostamento con Frecce (Shift per spostamento veloce)
+      if (!selectedId || !['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) return;
+
       e.preventDefault();
-      const step = e.shiftKey ? 1 : 0.2;
+      const step = e.shiftKey ? 1.5 : 0.2;
       const delta = { x: 0, y: 0 };
       if (e.key === 'ArrowUp') delta.y = -step;
       if (e.key === 'ArrowDown') delta.y = step;
@@ -89,22 +199,30 @@ export default function App() {
 
       if (selectedId.startsWith(SIG_PREFIX)) {
         setSignatures((prev) =>
-          prev.map((s) => (s.id === selectedId ? { ...s, x: clamp(s.x + delta.x, 0, 100), y: clamp(s.y + delta.y, 0, 100) } : s))
+          prev.map((s) =>
+            s.id === selectedId
+              ? { ...s, x: clamp(s.x + delta.x, 0, 100), y: clamp(s.y + delta.y, 0, 100) }
+              : s
+          )
         );
       } else {
-        setFields((prev) =>
-          prev.map((f) => (f.id === selectedId ? { ...f, x: clamp(f.x + delta.x, 0, 100), y: clamp(f.y + delta.y, 0, 100) } : f))
+        setFields(
+          fields.map((f) =>
+            f.id === selectedId
+              ? { ...f, x: clamp(f.x + delta.x, 0, 100), y: clamp(f.y + delta.y, 0, 100) }
+              : f
+          )
         );
       }
     };
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [selectedId]);
+  }, [selectedId, fields, signatures, copiedElement, undoFields, redoFields, setFields]);
 
   const currentPageSize = pageSizes[currentPage];
 
-  /* ---- Handlers PDF ---- */
+  /* Handlers PDF */
   const handleFileUpload = async (e) => {
     const file = e.target.files[0];
     if (!file || file.type !== 'application/pdf') return;
@@ -157,18 +275,47 @@ export default function App() {
     setErrorMessage('');
   };
 
-  /* ---- Handlers Campi ---- */
-  const handleAddField = (e) => {
-    e.preventDefault();
-    if (!newFieldName.trim()) return;
+  /* Gestione Campi Testo */
+  const addCustomField = (label, value = '') => {
     const id = `f_${Date.now()}`;
-    setFields((prev) => [...prev, { id, label: newFieldName.trim(), page: currentPage, x: 40, y: 50, value: '', fontSize: 10, bold: false, italic: false, underline: false, color: '#000000' }]);
-    setNewFieldName('');
+    const newField = {
+      id,
+      label,
+      page: currentPage,
+      x: 40,
+      y: 50,
+      value,
+      fontSize: 10,
+      bold: false,
+      italic: false,
+      underline: false,
+      color: '#000000',
+    };
+    setFields([...fields, newField]);
     setSelectedId(id);
   };
 
+  const handleAddField = (e) => {
+    e.preventDefault();
+    if (!newFieldName.trim()) return;
+    addCustomField(newFieldName.trim(), '');
+    setNewFieldName('');
+  };
+
+  // Funzione per inserire rapidamente un campo prendendo dai dati profilo
+  const addProfileField = (type) => {
+    if (type === 'Nome') {
+      const fullName = [signerInfo.nome, signerInfo.cognome].filter(Boolean).join(' ');
+      addCustomField('Nome e Cognome', fullName);
+    } else if (type === 'CF') {
+      addCustomField('Codice Fiscale', signerInfo.cf || '');
+    } else if (type === 'Email') {
+      addCustomField('Email', signerInfo.email || '');
+    }
+  };
+
   const removeField = (id) => {
-    setFields((prev) => prev.filter((f) => f.id !== id));
+    setFields(fields.filter((f) => f.id !== id));
     if (selectedId === id) setSelectedId(null);
   };
 
@@ -182,15 +329,15 @@ export default function App() {
       x: clamp(source.x + 3, 0, 100),
       y: clamp(source.y + 3, 0, 100),
     };
-    setFields((prev) => [...prev, copy]);
+    setFields([...fields, copy]);
     setSelectedId(copy.id);
   };
 
   const updateField = (id, key, val) => {
-    setFields((prev) => prev.map((f) => (f.id === id ? { ...f, [key]: val } : f)));
+    setFields(fields.map((f) => (f.id === id ? { ...f, [key]: val } : f)));
   };
 
-  /* ---- Dragging & Resizing ---- */
+  /* Dragging & Snapping */
   const handlePointerDown = (id, e) => {
     e.stopPropagation();
     setDraggingId(id);
@@ -211,13 +358,30 @@ export default function App() {
 
     if (draggingId) {
       e.preventDefault();
-      const x = clamp(((clientX - rect.left) / rect.width) * 100, 0, 100);
-      const y = clamp(((clientY - rect.top) / rect.height) * 100, 0, 100);
+      let x = clamp(((clientX - rect.left) / rect.width) * 100, 0, 100);
+      let y = clamp(((clientY - rect.top) / rect.height) * 100, 0, 100);
+
+      let activeSnapX = null;
+      let activeSnapY = null;
+
+      fields.forEach((f) => {
+        if (f.id === draggingId || f.page !== currentPage) return;
+        if (Math.abs(f.x - x) < SNAP_THRESHOLD) {
+          x = f.x;
+          activeSnapX = f.x;
+        }
+        if (Math.abs(f.y - y) < SNAP_THRESHOLD) {
+          y = f.y;
+          activeSnapY = f.y;
+        }
+      });
+
+      setSnapLines({ x: activeSnapX, y: activeSnapY });
 
       if (draggingId.startsWith(SIG_PREFIX)) {
         setSignatures((prev) => prev.map((s) => (s.id === draggingId ? { ...s, page: currentPage, x, y } : s)));
       } else {
-        setFields((prev) => prev.map((f) => (f.id === draggingId ? { ...f, page: currentPage, x, y } : f)));
+        setFields(fields.map((f) => (f.id === draggingId ? { ...f, page: currentPage, x, y } : f)));
       }
     } else if (resizingId) {
       e.preventDefault();
@@ -234,7 +398,7 @@ export default function App() {
         const currentX = (field.x / 100) * rect.width;
         const newWidthPx = clientX - (rect.left + currentX);
         const newWidthPct = clamp((newWidthPx / rect.width) * 100, 5, 80);
-        setFields((prev) => prev.map((f) => (f.id === resizingId ? { ...f, widthPct: newWidthPct } : f)));
+        setFields(fields.map((f) => (f.id === resizingId ? { ...f, widthPct: newWidthPct } : f)));
       }
     }
   };
@@ -242,9 +406,10 @@ export default function App() {
   const handlePointerUp = () => {
     setDraggingId(null);
     setResizingId(null);
+    setSnapLines({ x: null, y: null });
   };
 
-  /* ---- Signatures ---- */
+  /* Gestione Firme */
   const addSignature = () => {
     const sig = makeSignature(currentPage);
     setSignatures((prev) => [...prev, sig]);
@@ -273,85 +438,100 @@ export default function App() {
     setSignatures((prev) => prev.map((s) => (s.id === id ? { ...s, [key]: val } : s)));
   };
 
+  const saveSignatureToStorage = (dataUrl) => {
+    if (!dataUrl || savedSignatures.includes(dataUrl)) return;
+    setSavedSignatures((prev) => [...prev, dataUrl]);
+  };
+
   const fontPxFor = (fontSizePt) => {
     if (!currentPageSize || !renderedPageWidth) return fontSizePt;
     return fontSizePt * (renderedPageWidth / currentPageSize.widthPt);
   };
 
-  /* ---- Export PDF ---- */
-  const generatePDF = async () => {
+  /* Export Handlers */
+  const handleGeneratePDF = async () => {
     if (!pdfBytes) return;
     setErrorMessage('');
     setIsGenerating(true);
     try {
-      const pdfDoc = await PDFDocument.load(pdfBytes);
-      const pages = pdfDoc.getPages();
-      const fontCache = {};
-      const getFont = async (bold, italic) => {
-        let type = StandardFonts.Helvetica;
-        if (bold && italic) type = StandardFonts.HelveticaBoldOblique;
-        else if (bold) type = StandardFonts.HelveticaBold;
-        else if (italic) type = StandardFonts.HelveticaOblique;
-        if (!fontCache[type]) fontCache[type] = await pdfDoc.embedFont(type);
-        return fontCache[type];
-      };
-
-      for (const field of fields) {
-        if (!field.value) continue;
-        const page = pages[field.page - 1];
-        if (!page) continue;
-        const { width, height } = page.getSize();
-        const fontSize = Number(field.fontSize) || 10;
-        const font = await getFont(field.bold, field.italic);
-        const textColor = hexToRgb(field.color);
-
-        const x = (field.x / 100) * width;
-        const topY = height - (field.y / 100) * height;
-        const baselineY = topY - fontSize * CAP_HEIGHT_RATIO;
-
-        page.drawText(String(field.value), { x, y: baselineY, size: fontSize, font, color: textColor });
-
-        if (field.underline) {
-          const textWidth = font.widthOfTextAtSize(String(field.value), fontSize);
-          page.drawLine({
-            start: { x, y: baselineY - fontSize * 0.12 },
-            end: { x: x + textWidth, y: baselineY - fontSize * 0.12 },
-            thickness: Math.max(0.5, fontSize * 0.06),
-            color: textColor,
-          });
-        }
-      }
-
-      for (const sig of signatures) {
-        if (!sig.dataUrl) continue;
-        const page = pages[sig.page - 1];
-        if (!page) continue;
-        const { width, height } = page.getSize();
-        const bytes = await fetch(sig.dataUrl).then((r) => r.arrayBuffer());
-        const isPng = sig.dataUrl.startsWith('data:image/png');
-        const image = isPng ? await pdfDoc.embedPng(bytes) : await pdfDoc.embedJpg(bytes);
-
-        const widthPt = (sig.widthPct / 100) * width;
-        const heightPt = widthPt * (image.height / image.width);
-        const x = (sig.x / 100) * width;
-        const y = height - (sig.y / 100) * height - heightPt;
-
-        page.drawImage(image, { x, y, width: widthPt, height: heightPt });
-      }
-
-      const outBytes = await pdfDoc.save();
-      const blob = new Blob([outBytes], { type: 'application/pdf' });
-      const link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
-      link.download = `compilato_${pdfName || 'documento.pdf'}`;
-      link.click();
-      URL.revokeObjectURL(link.href);
+      await buildPdf({ pdfBytes, fields, signatures, pdfName });
     } catch (err) {
       console.error(err);
       setErrorMessage('Errore imprevisto durante la generazione del PDF.');
     } finally {
       setIsGenerating(false);
     }
+  };
+
+  const exportCurrentPageAsImage = () => {
+    if (!pageRef.current) return;
+    const img = pageRef.current.querySelector('img');
+    if (!img) return;
+
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+
+    canvas.width = img.naturalWidth;
+    canvas.height = img.naturalHeight;
+
+    // 1. Disegna la pagina PDF di sfondo
+    ctx.drawImage(img, 0, 0);
+
+    const scaleX = canvas.width / 100;
+    const scaleY = canvas.height / 100;
+
+    // 2. Disegna i campi di testo presenti nella pagina attuale
+    fieldsOnPage.forEach((f) => {
+      const x = f.x * scaleX;
+      const y = f.y * scaleY;
+      const fontSize = (f.fontSize || 10) * (canvas.width / (pageSizes[currentPage]?.widthPt || 595));
+
+      let fontStyle = '';
+      if (f.italic) fontStyle += 'italic ';
+      if (f.bold) fontStyle += 'bold ';
+      ctx.font = `${fontStyle}${fontSize}px sans-serif`;
+      ctx.fillStyle = f.color || '#000000';
+      ctx.textBaseline = 'top';
+
+      ctx.fillText(f.value || f.label || '', x, y);
+
+      if (f.underline) {
+        const textMetrics = ctx.measureText(f.value || f.label || '');
+        ctx.beginPath();
+        ctx.moveTo(x, y + fontSize);
+        ctx.lineTo(x + textMetrics.width, y + fontSize);
+        ctx.strokeStyle = f.color || '#000000';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+    });
+
+    // 3. Disegna le firme presenti nella pagina attuale
+    const sigPromises = signaturesOnPage.map((s) => {
+      return new Promise((resolve) => {
+        if (!s.dataUrl) return resolve();
+        const sigImg = new Image();
+        sigImg.crossOrigin = 'anonymous';
+        sigImg.onload = () => {
+          const x = s.x * scaleX;
+          const y = s.y * scaleY;
+          const width = (s.widthPct || 22) * scaleX;
+          const height = width * (sigImg.naturalHeight / sigImg.naturalWidth);
+          ctx.drawImage(sigImg, x, y, width, height);
+          resolve();
+        };
+        sigImg.onerror = () => resolve();
+        sigImg.src = s.dataUrl;
+      });
+    });
+
+    // Attende il caricamento di tutte le immagini firma prima di avviare il download
+    Promise.all(sigPromises).then(() => {
+      const link = document.createElement('a');
+      link.href = canvas.toDataURL('image/png');
+      link.download = `pagina_${currentPage}_${pdfName || 'documento'}.png`;
+      link.click();
+    });
   };
 
   const fieldsOnPage = fields.filter((f) => f.page === currentPage);
@@ -362,9 +542,15 @@ export default function App() {
       className="min-h-screen bg-slate-50 p-3 sm:p-6 max-w-7xl mx-auto font-sans pb-16 text-slate-800"
       onClick={() => setSelectedId(null)}
     >
-      <header className="mb-6 text-center">
-        <h1 className="text-xl sm:text-2xl font-extrabold text-slate-900 tracking-tight">Compilatore &amp; Firmatario PDF</h1>
-      </header>
+      <AppHeader
+        pdfBytes={pdfBytes}
+        undoFields={undoFields}
+        redoFields={redoFields}
+        canUndo={canUndo}
+        canRedo={canRedo}
+        signerInfo={signerInfo}
+        onSaveSignerInfo={handleSaveSignerInfo}
+      />
 
       {errorMessage && (
         <div className="bg-red-50 border border-red-200 text-red-700 p-3 rounded-xl mb-4 text-xs flex items-center gap-2 shadow-sm">
@@ -376,6 +562,10 @@ export default function App() {
       {!pdfBytes ? (
         <WelcomePage onFileUpload={handleFileUpload} isLoading={isLoadingPdf} />
       ) : (
+        <>
+        {/* Mostra il banner Privacy solo quando l'utente sta lavorando su un PDF */}
+        <PrivacyNotice />
+
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           <div className="lg:col-span-7 space-y-3">
             <div className="bg-white p-3 rounded-2xl shadow-sm border border-slate-200 flex items-center justify-between">
@@ -383,7 +573,11 @@ export default function App() {
                 <FileText className="text-indigo-600 flex-shrink-0" size={18} />
                 <span className="text-xs font-semibold text-slate-700 truncate">{pdfName}</span>
               </div>
-              <button onClick={resetDocument} className="text-xs font-medium text-red-500 hover:bg-red-50 px-2.5 py-1.5 rounded-lg transition-colors" title="Carica un nuovo file PDF">
+              <button
+                onClick={resetDocument}
+                className="text-xs font-medium text-red-500 hover:bg-red-50 px-2.5 py-1.5 rounded-lg transition-colors"
+                title="Carica un nuovo file PDF"
+              >
                 Cambia file
               </button>
             </div>
@@ -397,134 +591,81 @@ export default function App() {
               onZoom={(d) => setZoomLevel((z) => clamp(z + d, 1, 2.5))}
             />
 
-            {/* Banner Informativo Tasti Direzionali (Solo Desktop se un elemento è selezionato) */}
-            {isDesktop && selectedId && (
-              <div className="bg-indigo-50/80 border border-indigo-200 text-indigo-900 px-3 py-2 rounded-xl text-xs flex items-center gap-2 shadow-sm animate-fade-in">
-                <Keyboard className="text-indigo-600 flex-shrink-0" size={16} />
-                <span>Usa le <strong>frecce della tastiera</strong> per spostare con precisione l'elemento selezionato (usa <strong>Shift + Freccia</strong> per spostamenti più veloci).</span>
-              </div>
-            )}
-
-            {pageImages[currentPage] && (
-              <div className="border border-slate-200 rounded-2xl overflow-auto shadow-inner bg-slate-200/60 h-[65vh] lg:h-[72vh] relative">
-                <div
-                  ref={pageRef}
-                  onMouseMove={handlePointerMove}
-                  onTouchMove={handlePointerMove}
-                  onMouseUp={handlePointerUp}
-                  onTouchEnd={handlePointerUp}
-                  onClick={(e) => e.stopPropagation()}
-                  style={{ width: `${zoomLevel * 100}%` }}
-                  className="relative bg-white cursor-default origin-top-left shadow-lg mx-auto"
-                >
-                  <img src={pageImages[currentPage]} alt={`Pagina ${currentPage}`} className="w-full h-auto block pointer-events-none select-none" draggable={false} />
-
-                  {fieldsOnPage.map((field) => (
-                    <FieldOverlay
-                      key={field.id}
-                      field={field}
-                      fontPx={fontPxFor(field.fontSize || 10)}
-                      selected={selectedId === field.id}
-                      dragging={draggingId === field.id}
-                      onPointerDown={handlePointerDown}
-                      onResizeStart={handleResizeStart}
-                    />
-                  ))}
-
-                  {signaturesOnPage.map((sig) => (
-                    <SignatureOverlay
-                      key={sig.id}
-                      signature={sig}
-                      selected={selectedId === sig.id}
-                      dragging={draggingId === sig.id}
-                      onPointerDown={handlePointerDown}
-                      onResizeStart={handleResizeStart}
-                    />
-                  ))}
+            {isDesktop && (
+              <div className="bg-indigo-50/90 border border-indigo-200 text-indigo-950 px-3.5 py-2.5 rounded-xl text-xs flex items-start gap-2.5 shadow-sm">
+                <Keyboard className="text-indigo-600 flex-shrink-0 mt-0.5" size={16} />
+                <div className="space-y-0.5">
+                  <p className="font-semibold text-indigo-900">Scorciatoie da tastiera:</p>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-indigo-800">
+                    <span><strong>Frecce:</strong> Sposta l'elemento</span>
+                    <span><strong>Shift + Frecce:</strong> Spostamento rapido</span>
+                    <span><strong>Ctrl+C / Ctrl+V:</strong> Copia e Incolla</span>
+                    <span><strong>Canc / Backspace:</strong> Elimina selezionato</span>
+                    <span><strong>Ctrl+Z / Ctrl+Y:</strong> Annulla / Ripristina</span>
+                  </div>
                 </div>
               </div>
             )}
+
+            <DocumentCanvas
+              pageRef={pageRef}
+              zoomLevel={zoomLevel}
+              currentPage={currentPage}
+              pageImages={pageImages}
+              snapLines={snapLines}
+              fieldsOnPage={fieldsOnPage}
+              signaturesOnPage={signaturesOnPage}
+              selectedId={selectedId}
+              draggingId={draggingId}
+              fontPxFor={fontPxFor}
+              handlePointerMove={handlePointerMove}
+              handlePointerUp={handlePointerUp}
+              handlePointerDown={handlePointerDown}
+              handleResizeStart={handleResizeStart}
+            />
           </div>
 
           <div className="lg:col-span-5 space-y-4" onClick={(e) => e.stopPropagation()}>
-            <form onSubmit={handleAddField} className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 space-y-2">
-              <h2 className="font-bold text-slate-800 text-xs uppercase tracking-wider flex items-center justify-between">
-                <span>Aggiungi campo</span>
-                <span className="text-[10px] text-slate-400 font-normal">Es. Codice Fiscale, Luogo</span>
-              </h2>
-              <div className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder="Nome campo"
-                  value={newFieldName}
-                  onChange={(e) => setNewFieldName(e.target.value)}
-                  className="w-full border border-slate-300 rounded-xl px-3 py-2 text-xs outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 bg-slate-50/50"
-                />
-                <button type="submit" className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-1 flex-shrink-0 transition-colors shadow-sm" title="Aggiungi nuovo campo di testo">
-                  <Plus size={14} /> <span>Crea</span>
-                </button>
-              </div>
-            </form>
+            <FieldSection
+              fields={fields}
+              numPages={numPages}
+              newFieldName={newFieldName}
+              selectedId={selectedId}
+              profiles={signerInfo}
+              setNewFieldName={setNewFieldName}
+              handleAddField={handleAddField}
+              setSelectedId={setSelectedId}
+              updateField={updateField}
+              removeField={removeField}
+              duplicateField={duplicateField}
+            />
 
-            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 space-y-3 max-h-[36vh] overflow-y-auto">
-              <h2 className="font-bold text-slate-800 text-xs uppercase tracking-wider">Campi e formattazione</h2>
-              {fields.map((field) => (
-                <FieldRow
-                  key={field.id}
-                  field={field}
-                  numPages={numPages}
-                  selected={selectedId === field.id}
-                  onSelect={setSelectedId}
-                  onUpdate={updateField}
-                  onRemove={removeField}
-                  onDuplicate={duplicateField}
-                />
-              ))}
-              {fields.length === 0 && <p className="text-xs text-slate-400 text-center py-4">Nessun campo. Aggiungine uno sopra.</p>}
-            </div>
+            <SignatureSection
+              signatures={signatures}
+              savedSignatures={savedSignatures}
+              numPages={numPages}
+              selectedId={selectedId}
+              addSignature={addSignature}
+              setSelectedId={setSelectedId}
+              updateSignature={updateSignature}
+              saveSignatureToStorage={saveSignatureToStorage}
+              removeSignature={removeSignature}
+              duplicateSignature={duplicateSignature}
+              onSelectRecentSignature={(sigUrl) => {
+                const newSig = makeSignature(currentPage);
+                newSig.dataUrl = sigUrl;
+                setSignatures((prev) => [...prev, newSig]);
+              }}
+            />
 
-            <div className="space-y-3">
-              <div className="flex items-center justify-between px-1">
-                <h2 className="font-bold text-slate-800 text-xs uppercase tracking-wider">Firme</h2>
-                <button
-                  type="button"
-                  onClick={addSignature}
-                  className="text-xs font-semibold text-indigo-600 hover:text-indigo-800 flex items-center gap-1 transition-colors"
-                  title="Aggiungi una nuova firma o timbro"
-                >
-                  <Plus size={14} /> Aggiungi firma
-                </button>
-              </div>
-              {signatures.map((sig, i) => (
-                <SignatureSlot
-                  key={sig.id}
-                  signature={sig}
-                  index={i}
-                  numPages={numPages}
-                  selected={selectedId === sig.id}
-                  onSelect={setSelectedId}
-                  onUpdate={(key, val) => updateSignature(sig.id, key, val)}
-                  onCapture={(dataUrl) => updateSignature(sig.id, 'dataUrl', dataUrl)}
-                  onClear={() => updateSignature(sig.id, 'dataUrl', null)}
-                  onRemove={() => removeSignature(sig.id)}
-                  onDuplicate={() => duplicateSignature(sig.id)}
-                  canRemove={signatures.length > 1}
-                />
-              ))}
-            </div>
-
-            <button
-              onClick={generatePDF}
-              disabled={isGenerating}
-              className="w-full bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-bold p-3.5 rounded-2xl flex items-center justify-center gap-2 shadow-lg hover:shadow-xl transition-all text-sm"
-              title="Scarica il PDF modificato sul tuo dispositivo"
-            >
-              <Download size={18} />
-              <span>{isGenerating ? 'Generazione in corso…' : 'Genera e scarica PDF'}</span>
-            </button>
+            <ExportActions
+              isGenerating={isGenerating}
+              onGeneratePdf={handleGeneratePDF}
+              onExportImage={exportCurrentPageAsImage}
+            />
           </div>
         </div>
-      )}
+      </>)}
     </div>
   );
 }

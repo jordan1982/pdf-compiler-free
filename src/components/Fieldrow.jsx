@@ -1,7 +1,9 @@
 import React from 'react';
-import { Bold, Italic, Underline, Trash2, Copy, Palette } from 'lucide-react';
+import { Bold, Italic, Underline, Trash2, Copy, Palette, UserCheck } from 'lucide-react';
 
-export default function FieldRow({ field, numPages, selected, onSelect, onUpdate, onRemove, onDuplicate }) {
+export default function FieldRow({ field, numPages, selected, onSelect, onUpdate, onRemove, onDuplicate, profiles = {} }) {
+  const profileKeys = Object.keys(profiles);
+
   return (
     <div
       onClick={() => onSelect(field.id)}
@@ -9,7 +11,6 @@ export default function FieldRow({ field, numPages, selected, onSelect, onUpdate
         selected ? 'bg-indigo-50/80 border-indigo-300 shadow-sm ring-1 ring-indigo-200' : 'bg-slate-50/50 hover:bg-slate-100/80'
       }`}
     >
-      {/* Header: Titolo, Pagina e Azioni */}
       <div className="flex justify-between items-center text-xs">
         <span className="font-bold text-slate-800 truncate max-w-[120px]" title={field.label}>
           {field.label}
@@ -31,7 +32,7 @@ export default function FieldRow({ field, numPages, selected, onSelect, onUpdate
             type="button"
             onClick={(e) => { e.stopPropagation(); onDuplicate(field.id); }}
             className="text-slate-500 hover:text-indigo-600 p-1.5 rounded-lg hover:bg-white transition-colors"
-            title="Duplica questo campo"
+            title="Duplica (Ctrl+C / Ctrl+V)"
           >
             <Copy size={14} />
           </button>
@@ -46,15 +47,36 @@ export default function FieldRow({ field, numPages, selected, onSelect, onUpdate
         </div>
       </div>
 
-      {/* Input Testo e Dimensione */}
       <div className="flex gap-2">
-        <input
-          type="text"
-          value={field.value}
-          onChange={(e) => onUpdate(field.id, 'value', e.target.value)}
-          placeholder={`Inserisci ${field.label}`}
-          className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs outline-none focus:border-indigo-500 focus:bg-white bg-white/80 shadow-sm"
-        />
+        <div className="relative flex-1">
+          <input
+            type="text"
+            value={field.value}
+            onChange={(e) => onUpdate(field.id, 'value', e.target.value)}
+            placeholder={`Inserisci ${field.label}`}
+            className="w-full border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs outline-none focus:border-indigo-500 focus:bg-white bg-white/80 shadow-sm pr-7"
+          />
+          {profileKeys.length > 0 && (
+            <div className="absolute right-1 top-1/2 -translate-y-1/2 group">
+              <button type="button" className="text-slate-400 hover:text-indigo-600 p-1" title="Autocompila da profilo">
+                <UserCheck size={13} />
+              </button>
+              <div className="hidden group-hover:block absolute right-0 top-full mt-1 bg-white border border-slate-200 shadow-xl rounded-lg py-1 z-20 min-w-[120px]">
+                <div className="px-2 py-1 text-[10px] font-bold text-slate-400 uppercase">Profili</div>
+                {profileKeys.map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); onUpdate(field.id, 'value', profiles[key]); }}
+                    className="w-full text-left px-2.5 py-1 text-xs text-slate-700 hover:bg-indigo-50 truncate"
+                  >
+                    {key}: {profiles[key]}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
         <div className="flex items-center gap-1 bg-white px-2 rounded-lg border border-slate-300 shadow-sm flex-shrink-0" title="Dimensione testo in punti">
           <span className="text-[10px] text-slate-400 font-bold">Pt:</span>
           <input
@@ -68,7 +90,6 @@ export default function FieldRow({ field, numPages, selected, onSelect, onUpdate
         </div>
       </div>
 
-      {/* Barra Formattazione e Colore */}
       <div className="flex items-center justify-between pt-1 border-t border-slate-200/60">
         <div className="flex items-center gap-1">
           <button
@@ -97,7 +118,6 @@ export default function FieldRow({ field, numPages, selected, onSelect, onUpdate
           </button>
         </div>
 
-        {/* Picker Colore */}
         <div className="flex items-center gap-1.5 bg-white border border-slate-300 px-2 py-1 rounded-md shadow-sm" title="Cambia colore del testo">
           <Palette size={13} className="text-slate-500" />
           <input

@@ -1,5 +1,25 @@
 import React from 'react';
-import { Upload, ShieldCheck, Heart, Zap, FileText } from 'lucide-react';
+import { Upload, ShieldCheck, Heart, Zap, Share2 } from 'lucide-react';
+
+function ShareWhatsAppButton() {
+  const handleShare = () => {
+    const currentUrl = window.location.href;
+    const message = `Ciao! 👋 Ti segnalo SignFlow: un tool gratuito e velocissimo per compilare e firmare PDF direttamente dal browser, senza installare nulla e nel rispetto totale della privacy (i dati non lasciano mai il tuo dispositivo)! 🔒📄\n\nProvalo qui: ${currentUrl}`;
+    const whatsappUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(message)}`;
+    window.open(whatsappUrl, '_blank', 'noopener,noreferrer');
+  };
+
+  return (
+    <button
+      onClick={handleShare}
+      className="inline-flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs px-3.5 py-2 rounded-xl shadow-sm hover:shadow transition-all duration-200 active:scale-95"
+      title="Condividi SignFlow su WhatsApp"
+    >
+      <Share2 size={15} />
+      <span>Condividi su WhatsApp</span>
+    </button>
+  );
+}
 
 export default function WelcomePage({ onFileUpload, isLoading }) {
   return (
@@ -12,6 +32,9 @@ export default function WelcomePage({ onFileUpload, isLoading }) {
         <p className="text-slate-600 max-w-2xl mx-auto text-sm sm:text-base">
           Un'applicazione semplice, rapida e concepita per la massima privacy. Aggiungi testo, firme e formatta i tuoi documenti direttamente dal browser o dal cellulare.
         </p>
+        <div className="flex justify-center pt-2">
+          <ShareWhatsAppButton />
+        </div>
       </div>
 
       {/* Upload Box */}
