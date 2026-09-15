@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
-import { FileText, AlertCircle, Keyboard } from 'lucide-react';
+import { PDFDocument } from 'pdf-lib';
+import { FileText, AlertCircle, Keyboard, Trash2 } from 'lucide-react';
 
 import { clamp, getPointerPos } from './utils';
 import { useHistory } from './utils/history';
@@ -40,6 +41,8 @@ export default function App() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isDesktop, setIsDesktop] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(1.4);
+  const [pageToDelete, setPageToDelete] = useState(null);
+  const [viewMode, setViewMode] = useState('single');
 
   // Gestione Profilo Firmatario (con persistenza localStorage)
   const [signerInfo, setSignerInfo] = useState(() => {
@@ -92,13 +95,13 @@ export default function App() {
   const [renderedPageWidth, setRenderedPageWidth] = useState(0);
 
   const PrivacyNotice = () => (
-  <div className="bg-emerald-50/80 border border-emerald-200/80 text-emerald-900 px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-2 mb-4 shadow-sm">
-    <span className="text-base flex-shrink-0">🔒</span>
-    <p className="leading-snug">
-      <strong>Privacy garantita:</strong> I dati del profilo e le firme sono salvati esclusivamente nella memoria locale del tuo browser (<code className="text-emerald-700 font-mono">localStorage</code>). Nessun dato viene inviato a server esterni.
-    </p>
-  </div>
-);
+    <div className="bg-emerald-50/80 border border-emerald-200/80 text-emerald-900 px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-2 mb-4 shadow-sm">
+      <span className="text-base flex-shrink-0">🔒</span>
+      <p className="leading-snug">
+        <strong>Privacy garantita:</strong> I dati del profilo e le firme sono salvati esclusivamente nella memoria locale del tuo browser (<code className="text-emerald-700 font-mono">localStorage</code>). Nessun dato viene inviato a server esterni.
+      </p>
+    </div>
+  );
 
   useEffect(() => {
     setIsDesktop(window.matchMedia('(pointer: fine)').matches);
@@ -118,13 +121,12 @@ export default function App() {
     return () => ro.disconnect();
   }, [pageImages, currentPage]);
 
-  /* Scorciatoie da tastiera completi */
+  /* Scorciatoie da tastiera */
   useEffect(() => {
     const onKeyDown = (e) => {
       const isInput = ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName);
       if (isInput) return;
 
-      // 1. Undo / Redo
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
         e.preventDefault();
         if (e.shiftKey) redoFields();
@@ -137,7 +139,6 @@ export default function App() {
         return;
       }
 
-      // 2. Cancellazione con CANC o BACKSPACE
       if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId) {
         e.preventDefault();
         if (selectedId.startsWith(SIG_PREFIX)) {
@@ -148,7 +149,6 @@ export default function App() {
         return;
       }
 
-      // 3. Copia (Ctrl+C / Cmd+C)
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c' && selectedId) {
         e.preventDefault();
         if (selectedId.startsWith(SIG_PREFIX)) {
@@ -161,13 +161,13 @@ export default function App() {
         return;
       }
 
-      // 4. Incolla (Ctrl+V / Cmd+V)
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v' && copiedElement) {
         e.preventDefault();
         if (copiedElement.type === 'field') {
           const copy = {
             ...copiedElement.data,
             id: `f_${Date.now()}`,
+            page: currentPage,
             x: clamp(copiedElement.data.x + 3, 0, 100),
             y: clamp(copiedElement.data.y + 3, 0, 100),
           };
@@ -177,6 +177,7 @@ export default function App() {
           const copy = {
             ...copiedElement.data,
             id: `${SIG_PREFIX}${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+            page: currentPage,
             x: clamp(copiedElement.data.x + 3, 0, 100),
             y: clamp(copiedElement.data.y + 3, 0, 100),
           };
@@ -186,39 +187,54 @@ export default function App() {
         return;
       }
 
-      // 5. Spostamento con Frecce (Shift per spostamento veloce)
       if (!selectedId || !['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) return;
 
       e.preventDefault();
       const step = e.shiftKey ? 1.5 : 0.2;
-      const delta = { x: 0, y: 0 };
-      if (e.key === 'ArrowUp') delta.y = -step;
-      if (e.key === 'ArrowDown') delta.y = step;
-      if (e.key === 'ArrowLeft') delta.x = -step;
-      if (e.key === 'ArrowRight') delta.x = step;
+
+      const updateItemPosition = (item) => {
+        let newX = item.x;
+        let newY = item.y;
+        let newPage = item.page || currentPage;
+
+        if (e.key === 'ArrowLeft') newX -= step;
+        if (e.key === 'ArrowRight') newX += step;
+        if (e.key === 'ArrowUp') newY -= step;
+        if (e.key === 'ArrowDown') newY += step;
+
+        // Transizione verticale tra pagine adiacenti
+        if (newY < 0 && newPage > 1) {
+          newPage -= 1;
+          newY = 100 + newY;
+          setCurrentPage(newPage);
+        } else if (newY > 100 && newPage < numPages) {
+          newPage += 1;
+          newY = newY - 100;
+          setCurrentPage(newPage);
+        }
+
+        return {
+          ...item,
+          page: newPage,
+          x: clamp(newX, 0, 100),
+          y: clamp(newY, 0, 100),
+        };
+      };
 
       if (selectedId.startsWith(SIG_PREFIX)) {
         setSignatures((prev) =>
-          prev.map((s) =>
-            s.id === selectedId
-              ? { ...s, x: clamp(s.x + delta.x, 0, 100), y: clamp(s.y + delta.y, 0, 100) }
-              : s
-          )
+          prev.map((s) => (s.id === selectedId ? updateItemPosition(s) : s))
         );
       } else {
         setFields(
-          fields.map((f) =>
-            f.id === selectedId
-              ? { ...f, x: clamp(f.x + delta.x, 0, 100), y: clamp(f.y + delta.y, 0, 100) }
-              : f
-          )
+          fields.map((f) => (f.id === selectedId ? updateItemPosition(f) : f))
         );
       }
     };
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [selectedId, fields, signatures, copiedElement, undoFields, redoFields, setFields]);
+  }, [selectedId, fields, signatures, copiedElement, currentPage, numPages, undoFields, redoFields, setFields]);
 
   const currentPageSize = pageSizes[currentPage];
 
@@ -232,7 +248,7 @@ export default function App() {
       const buffer = await file.arrayBuffer();
       setPdfName(file.name);
       setPdfBytes(buffer);
-      await renderAllPages(buffer);
+      await renderAllPages(buffer, 1);
     } catch (err) {
       console.error(err);
       setErrorMessage('Errore durante la lettura del PDF.');
@@ -241,7 +257,7 @@ export default function App() {
     }
   };
 
-  const renderAllPages = async (arrayBuffer) => {
+  const renderAllPages = async (arrayBuffer, initialPage = 1) => {
     const pdf = await pdfjsLib.getDocument({ data: arrayBuffer.slice(0) }).promise;
     setNumPages(pdf.numPages);
 
@@ -262,7 +278,78 @@ export default function App() {
     }
     setPageImages(images);
     setPageSizes(sizes);
-    setCurrentPage(1);
+    setCurrentPage(initialPage);
+  };
+
+  /* Aggiunta e Rimozione Pagine */
+  const handleAddBlankPage = async () => {
+    if (!pdfBytes) return;
+    setIsLoadingPdf(true);
+    try {
+      const pdfDoc = await PDFDocument.load(pdfBytes);
+      const currentSize = pageSizes[currentPage] || { widthPt: 595.28, heightPt: 841.89 };
+
+      pdfDoc.insertPage(currentPage, [currentSize.widthPt, currentSize.heightPt]);
+
+      const newPdfBytes = await pdfDoc.save();
+      const newBuffer = newPdfBytes.buffer || newPdfBytes;
+      setPdfBytes(newBuffer);
+
+      setFields((prev) =>
+        prev.map((f) => (f.page > currentPage ? { ...f, page: f.page + 1 } : f))
+      );
+      setSignatures((prev) =>
+        prev.map((s) => (s.page > currentPage ? { ...s, page: s.page + 1 } : s))
+      );
+
+      await renderAllPages(newBuffer, currentPage + 1);
+    } catch (err) {
+      console.error(err);
+      setErrorMessage("Errore durante l'aggiunta della pagina bianca.");
+    } finally {
+      setIsLoadingPdf(false);
+    }
+  };
+
+  const handleDeleteRequest = () => {
+    if (numPages <= 1) return;
+    setPageToDelete(currentPage);
+  };
+
+  const confirmDeletePage = async () => {
+    if (!pdfBytes || numPages <= 1 || !pageToDelete) return;
+
+    const targetPage = pageToDelete;
+    setPageToDelete(null);
+    setIsLoadingPdf(true);
+
+    try {
+      const pdfDoc = await PDFDocument.load(pdfBytes);
+      pdfDoc.removePage(targetPage - 1);
+
+      const newPdfBytes = await pdfDoc.save();
+      const newBuffer = newPdfBytes.buffer || newPdfBytes;
+      setPdfBytes(newBuffer);
+
+      setFields((prev) =>
+        prev
+          .filter((f) => f.page !== targetPage)
+          .map((f) => (f.page > targetPage ? { ...f, page: f.page - 1 } : f))
+      );
+      setSignatures((prev) =>
+        prev
+          .filter((s) => s.page !== targetPage)
+          .map((s) => (s.page > targetPage ? { ...s, page: s.page - 1 } : s))
+      );
+
+      const targetRenderPage = Math.min(targetPage, numPages - 1);
+      await renderAllPages(newBuffer, targetRenderPage);
+    } catch (err) {
+      console.error(err);
+      setErrorMessage("Errore durante l'eliminazione della pagina.");
+    } finally {
+      setIsLoadingPdf(false);
+    }
   };
 
   const resetDocument = () => {
@@ -302,18 +389,6 @@ export default function App() {
     setNewFieldName('');
   };
 
-  // Funzione per inserire rapidamente un campo prendendo dai dati profilo
-  const addProfileField = (type) => {
-    if (type === 'Nome') {
-      const fullName = [signerInfo.nome, signerInfo.cognome].filter(Boolean).join(' ');
-      addCustomField('Nome e Cognome', fullName);
-    } else if (type === 'CF') {
-      addCustomField('Codice Fiscale', signerInfo.cf || '');
-    } else if (type === 'Email') {
-      addCustomField('Email', signerInfo.email || '');
-    }
-  };
-
   const removeField = (id) => {
     setFields(fields.filter((f) => f.id !== id));
     if (selectedId === id) setSelectedId(null);
@@ -351,13 +426,34 @@ export default function App() {
   };
 
   const handlePointerMove = (e) => {
-    if (!pageRef.current) return;
-    const rect = pageRef.current.getBoundingClientRect();
+    if (!draggingId && !resizingId) return;
+
     const { x: clientX, y: clientY } = getPointerPos(e);
     if (clientX === undefined || clientY === undefined) return;
 
+    const pageElements = Array.from(document.querySelectorAll('[data-page]'));
+    if (pageElements.length === 0) return;
+
+    let targetPageEl = pageElements.find((el) => {
+      const r = el.getBoundingClientRect();
+      return clientY >= r.top && clientY <= r.bottom;
+    });
+
+    if (!targetPageEl) {
+      const firstRect = pageElements[0].getBoundingClientRect();
+      if (clientY < firstRect.top) {
+        targetPageEl = pageElements[0];
+      } else {
+        targetPageEl = pageElements[pageElements.length - 1];
+      }
+    }
+
+    const targetPageNum = Number(targetPageEl.getAttribute('data-page'));
+    const rect = targetPageEl.getBoundingClientRect();
+
     if (draggingId) {
       e.preventDefault();
+
       let x = clamp(((clientX - rect.left) / rect.width) * 100, 0, 100);
       let y = clamp(((clientY - rect.top) / rect.height) * 100, 0, 100);
 
@@ -365,7 +461,7 @@ export default function App() {
       let activeSnapY = null;
 
       fields.forEach((f) => {
-        if (f.id === draggingId || f.page !== currentPage) return;
+        if (f.id === draggingId || f.page !== targetPageNum) return;
         if (Math.abs(f.x - x) < SNAP_THRESHOLD) {
           x = f.x;
           activeSnapX = f.x;
@@ -379,9 +475,13 @@ export default function App() {
       setSnapLines({ x: activeSnapX, y: activeSnapY });
 
       if (draggingId.startsWith(SIG_PREFIX)) {
-        setSignatures((prev) => prev.map((s) => (s.id === draggingId ? { ...s, page: currentPage, x, y } : s)));
+        setSignatures((prev) =>
+          prev.map((s) => (s.id === draggingId ? { ...s, page: targetPageNum, x, y } : s))
+        );
       } else {
-        setFields(fields.map((f) => (f.id === draggingId ? { ...f, page: currentPage, x, y } : f)));
+        setFields((prev) =>
+          prev.map((f) => (f.id === draggingId ? { ...f, page: targetPageNum, x, y } : f))
+        );
       }
     } else if (resizingId) {
       e.preventDefault();
@@ -391,14 +491,18 @@ export default function App() {
         const currentX = (sig.x / 100) * rect.width;
         const newWidthPx = clientX - (rect.left + currentX);
         const newWidthPct = clamp((newWidthPx / rect.width) * 100, 5, 80);
-        setSignatures((prev) => prev.map((s) => (s.id === resizingId ? { ...s, widthPct: newWidthPct } : s)));
+        setSignatures((prev) =>
+          prev.map((s) => (s.id === resizingId ? { ...s, widthPct: newWidthPct } : s))
+        );
       } else {
         const field = fields.find((f) => f.id === resizingId);
         if (!field) return;
         const currentX = (field.x / 100) * rect.width;
         const newWidthPx = clientX - (rect.left + currentX);
         const newWidthPct = clamp((newWidthPx / rect.width) * 100, 5, 80);
-        setFields(fields.map((f) => (f.id === resizingId ? { ...f, widthPct: newWidthPct } : f)));
+        setFields((prev) =>
+          prev.map((f) => (f.id === resizingId ? { ...f, widthPct: newWidthPct } : f))
+        );
       }
     }
   };
@@ -463,6 +567,9 @@ export default function App() {
     }
   };
 
+  const fieldsOnPage = fields.filter((f) => f.page === currentPage);
+  const signaturesOnPage = signatures.filter((s) => s.page === currentPage);
+
   const exportCurrentPageAsImage = () => {
     if (!pageRef.current) return;
     const img = pageRef.current.querySelector('img');
@@ -474,13 +581,11 @@ export default function App() {
     canvas.width = img.naturalWidth;
     canvas.height = img.naturalHeight;
 
-    // 1. Disegna la pagina PDF di sfondo
     ctx.drawImage(img, 0, 0);
 
     const scaleX = canvas.width / 100;
     const scaleY = canvas.height / 100;
 
-    // 2. Disegna i campi di testo presenti nella pagina attuale
     fieldsOnPage.forEach((f) => {
       const x = f.x * scaleX;
       const y = f.y * scaleY;
@@ -506,7 +611,6 @@ export default function App() {
       }
     });
 
-    // 3. Disegna le firme presenti nella pagina attuale
     const sigPromises = signaturesOnPage.map((s) => {
       return new Promise((resolve) => {
         if (!s.dataUrl) return resolve();
@@ -525,7 +629,6 @@ export default function App() {
       });
     });
 
-    // Attende il caricamento di tutte le immagini firma prima di avviare il download
     Promise.all(sigPromises).then(() => {
       const link = document.createElement('a');
       link.href = canvas.toDataURL('image/png');
@@ -533,9 +636,6 @@ export default function App() {
       link.click();
     });
   };
-
-  const fieldsOnPage = fields.filter((f) => f.page === currentPage);
-  const signaturesOnPage = signatures.filter((s) => s.page === currentPage);
 
   return (
     <div
@@ -563,109 +663,153 @@ export default function App() {
         <WelcomePage onFileUpload={handleFileUpload} isLoading={isLoadingPdf} />
       ) : (
         <>
-        {/* Mostra il banner Privacy solo quando l'utente sta lavorando su un PDF */}
-        <PrivacyNotice />
+          <PrivacyNotice />
 
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-          <div className="lg:col-span-7 space-y-3">
-            <div className="bg-white p-3 rounded-2xl shadow-sm border border-slate-200 flex items-center justify-between">
-              <div className="flex items-center gap-2 truncate">
-                <FileText className="text-indigo-600 flex-shrink-0" size={18} />
-                <span className="text-xs font-semibold text-slate-700 truncate">{pdfName}</span>
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+            <div className="lg:col-span-7 space-y-3">
+              <div className="bg-white p-3 rounded-2xl shadow-sm border border-slate-200 flex items-center justify-between">
+                <div className="flex items-center gap-2 truncate">
+                  <FileText className="text-indigo-600 flex-shrink-0" size={18} />
+                  <span className="text-xs font-semibold text-slate-700 truncate">{pdfName}</span>
+                </div>
+                <button
+                  onClick={resetDocument}
+                  className="text-xs font-medium text-red-500 hover:bg-red-50 px-2.5 py-1.5 rounded-lg transition-colors"
+                  title="Carica un nuovo file PDF"
+                >
+                  Cambia file
+                </button>
               </div>
-              <button
-                onClick={resetDocument}
-                className="text-xs font-medium text-red-500 hover:bg-red-50 px-2.5 py-1.5 rounded-lg transition-colors"
-                title="Carica un nuovo file PDF"
-              >
-                Cambia file
-              </button>
-            </div>
 
-            <PageToolbar
-              currentPage={currentPage}
-              numPages={numPages}
-              zoomLevel={zoomLevel}
-              onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
-              onNext={() => setCurrentPage((p) => Math.min(numPages, p + 1))}
-              onZoom={(d) => setZoomLevel((z) => clamp(z + d, 1, 2.5))}
-            />
+              <PageToolbar
+                currentPage={currentPage}
+                numPages={numPages}
+                zoomLevel={zoomLevel}
+                viewMode={viewMode}
+                onViewModeChange={setViewMode}
+                onPrev={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                onNext={() => setCurrentPage((p) => Math.min(numPages, p + 1))}
+                onZoom={(d) => setZoomLevel((z) => clamp(z + d, 1, 2.5))}
+                onAddPage={handleAddBlankPage}
+                onDeletePage={handleDeleteRequest}
+              />
 
-            {isDesktop && (
-              <div className="bg-indigo-50/90 border border-indigo-200 text-indigo-950 px-3.5 py-2.5 rounded-xl text-xs flex items-start gap-2.5 shadow-sm">
-                <Keyboard className="text-indigo-600 flex-shrink-0 mt-0.5" size={16} />
-                <div className="space-y-0.5">
-                  <p className="font-semibold text-indigo-900">Scorciatoie da tastiera:</p>
-                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-indigo-800">
-                    <span><strong>Frecce:</strong> Sposta l'elemento</span>
-                    <span><strong>Shift + Frecce:</strong> Spostamento rapido</span>
-                    <span><strong>Ctrl+C / Ctrl+V:</strong> Copia e Incolla</span>
-                    <span><strong>Canc / Backspace:</strong> Elimina selezionato</span>
-                    <span><strong>Ctrl+Z / Ctrl+Y:</strong> Annulla / Ripristina</span>
+              {isDesktop && (
+                <div className="bg-indigo-50/90 border border-indigo-200 text-indigo-950 px-3.5 py-2.5 rounded-xl text-xs flex items-start gap-2.5 shadow-sm">
+                  <Keyboard className="text-indigo-600 flex-shrink-0 mt-0.5" size={16} />
+                  <div className="space-y-0.5">
+                    <p className="font-semibold text-indigo-900">Scorciatoie da tastiera:</p>
+                    <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-indigo-800">
+                      <span><strong>Frecce:</strong> Sposta l'elemento</span>
+                      <span><strong>Shift + Frecce:</strong> Spostamento rapido</span>
+                      <span><strong>Ctrl+C / Ctrl+V:</strong> Copia e Incolla</span>
+                      <span><strong>Canc / Backspace:</strong> Elimina selezionato</span>
+                      <span><strong>Ctrl+Z / Ctrl+Y:</strong> Annulla / Ripristina</span>
+                    </div>
                   </div>
                 </div>
-              </div>
-            )}
+              )}
 
-            <DocumentCanvas
-              pageRef={pageRef}
-              zoomLevel={zoomLevel}
-              currentPage={currentPage}
-              pageImages={pageImages}
-              snapLines={snapLines}
-              fieldsOnPage={fieldsOnPage}
-              signaturesOnPage={signaturesOnPage}
-              selectedId={selectedId}
-              draggingId={draggingId}
-              fontPxFor={fontPxFor}
-              handlePointerMove={handlePointerMove}
-              handlePointerUp={handlePointerUp}
-              handlePointerDown={handlePointerDown}
-              handleResizeStart={handleResizeStart}
-            />
+              <DocumentCanvas
+                pageRef={pageRef}
+                zoomLevel={zoomLevel}
+                currentPage={currentPage}
+                numPages={numPages}
+                viewMode={viewMode}
+                pageImages={pageImages}
+                snapLines={snapLines}
+                fields={fields}
+                signatures={signatures}
+                selectedId={selectedId}
+                draggingId={draggingId}
+                fontPxFor={fontPxFor}
+                onPageChange={setCurrentPage}
+                handlePointerMove={handlePointerMove}
+                handlePointerUp={handlePointerUp}
+                handlePointerDown={handlePointerDown}
+                handleResizeStart={handleResizeStart}
+              />
+            </div>
+
+            <div className="lg:col-span-5 space-y-4" onClick={(e) => e.stopPropagation()}>
+              <FieldSection
+                fields={fields}
+                numPages={numPages}
+                newFieldName={newFieldName}
+                selectedId={selectedId}
+                profiles={signerInfo}
+                setNewFieldName={setNewFieldName}
+                handleAddField={handleAddField}
+                setSelectedId={setSelectedId}
+                updateField={updateField}
+                removeField={removeField}
+                duplicateField={duplicateField}
+              />
+
+              <SignatureSection
+                signatures={signatures}
+                savedSignatures={savedSignatures}
+                numPages={numPages}
+                selectedId={selectedId}
+                addSignature={addSignature}
+                setSelectedId={setSelectedId}
+                updateSignature={updateSignature}
+                saveSignatureToStorage={saveSignatureToStorage}
+                removeSignature={removeSignature}
+                duplicateSignature={duplicateSignature}
+                onSelectRecentSignature={(sigUrl) => {
+                  const newSig = makeSignature(currentPage);
+                  newSig.dataUrl = sigUrl;
+                  setSignatures((prev) => [...prev, newSig]);
+                }}
+              />
+
+              <ExportActions
+                isGenerating={isGenerating}
+                onGeneratePdf={handleGeneratePDF}
+                onExportImage={exportCurrentPageAsImage}
+              />
+            </div>
           </div>
+        </>
+      )}
 
-          <div className="lg:col-span-5 space-y-4" onClick={(e) => e.stopPropagation()}>
-            <FieldSection
-              fields={fields}
-              numPages={numPages}
-              newFieldName={newFieldName}
-              selectedId={selectedId}
-              profiles={signerInfo}
-              setNewFieldName={setNewFieldName}
-              handleAddField={handleAddField}
-              setSelectedId={setSelectedId}
-              updateField={updateField}
-              removeField={removeField}
-              duplicateField={duplicateField}
-            />
-
-            <SignatureSection
-              signatures={signatures}
-              savedSignatures={savedSignatures}
-              numPages={numPages}
-              selectedId={selectedId}
-              addSignature={addSignature}
-              setSelectedId={setSelectedId}
-              updateSignature={updateSignature}
-              saveSignatureToStorage={saveSignatureToStorage}
-              removeSignature={removeSignature}
-              duplicateSignature={duplicateSignature}
-              onSelectRecentSignature={(sigUrl) => {
-                const newSig = makeSignature(currentPage);
-                newSig.dataUrl = sigUrl;
-                setSignatures((prev) => [...prev, newSig]);
-              }}
-            />
-
-            <ExportActions
-              isGenerating={isGenerating}
-              onGeneratePdf={handleGeneratePDF}
-              onExportImage={exportCurrentPageAsImage}
-            />
+      {/* Modal Conferma Eliminazione Pagina */}
+      {pageToDelete && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-150"
+          onClick={() => setPageToDelete(null)}
+        >
+          <div
+            className="bg-white rounded-2xl p-5 max-w-sm w-full shadow-2xl border border-slate-100 text-center space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="w-11 h-11 rounded-full bg-red-100 text-red-600 flex items-center justify-center mx-auto">
+              <Trash2 size={22} />
+            </div>
+            <div>
+              <h3 className="font-bold text-slate-800 text-sm">Eliminare la pagina {pageToDelete}?</h3>
+              <p className="text-slate-500 text-xs mt-1 leading-relaxed">
+                L'operazione è irreversibile e rimuoverà anche eventuali testi o firme inseriti su questa pagina.
+              </p>
+            </div>
+            <div className="flex gap-2 pt-1">
+              <button
+                onClick={() => setPageToDelete(null)}
+                className="flex-1 py-2 px-3 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-50 font-medium text-xs transition-colors"
+              >
+                Annulla
+              </button>
+              <button
+                onClick={confirmDeletePage}
+                className="flex-1 py-2 px-3 rounded-xl bg-red-600 hover:bg-red-700 text-white font-medium text-xs shadow-sm transition-colors"
+              >
+                Elimina
+              </button>
+            </div>
           </div>
         </div>
-      </>)}
+      )}
     </div>
   );
 }
