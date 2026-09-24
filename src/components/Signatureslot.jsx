@@ -1,5 +1,6 @@
 import React, { useRef, useEffect, useState } from 'react';
-import { Trash2, Copy, Move, BookmarkPlus } from 'lucide-react';
+import { Trash2, Copy, Move, BookmarkPlus, ImageUp, Loader2 } from 'lucide-react';
+import { processSignatureImage } from '../utils/signatureImageProcessing';
 
 export default function SignatureSlot({
   signature,
@@ -16,7 +17,10 @@ export default function SignatureSlot({
   canRemove,
 }) {
   const canvasRef = useRef(null);
+  const fileInputRef = useRef(null);
   const [isDrawing, setIsDrawing] = useState(false);
+  const [isProcessingUpload, setIsProcessingUpload] = useState(false);
+  const [uploadError, setUploadError] = useState('');
 
   // Inizializza o aggiorna il canvas in base a dataUrl
   useEffect(() => {
@@ -73,6 +77,35 @@ export default function SignatureSlot({
     if (canvasRef.current) {
       const dataUrl = canvasRef.current.toDataURL('image/png');
       onCapture(dataUrl);
+    }
+  };
+
+  const handleUploadClick = (e) => {
+    e.stopPropagation();
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = async (e) => {
+    const file = e.target.files?.[0];
+    // reset the input so choosing the same file again still fires onChange
+    e.target.value = '';
+    if (!file) return;
+
+    if (!file.type.startsWith('image/')) {
+      setUploadError('Seleziona un file immagine (JPG, PNG...).');
+      return;
+    }
+
+    setUploadError('');
+    setIsProcessingUpload(true);
+    try {
+      const processedDataUrl = await processSignatureImage(file);
+      onCapture(processedDataUrl);
+    } catch (err) {
+      console.error(err);
+      setUploadError("Non sono riuscito a elaborare l'immagine. Riprova.");
+    } finally {
+      setIsProcessingUpload(false);
     }
   };
 
@@ -163,6 +196,35 @@ export default function SignatureSlot({
             onTouchEnd={stopDrawing}
             className="w-full h-28 cursor-crosshair touch-none block rounded-lg bg-white"
           />
+          {isProcessingUpload && (
+            <div className="absolute inset-1 rounded-lg bg-white/85 flex items-center justify-center gap-2 text-xs font-medium text-slate-600">
+              <Loader2 size={14} className="animate-spin text-indigo-600" />
+              <span>Elaborazione immagine…</span>
+            </div>
+          )}
+        </div>
+
+        <div onClick={(e) => e.stopPropagation()}>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            onChange={handleFileChange}
+            className="hidden"
+          />
+          <button
+            type="button"
+            onClick={handleUploadClick}
+            disabled={isProcessingUpload}
+            className="flex items-center justify-center gap-2 w-full border border-slate-300 hover:border-indigo-500 bg-slate-50/60 hover:bg-indigo-50/30 disabled:opacity-60 disabled:cursor-not-allowed text-slate-700 py-2 px-3 rounded-xl text-xs font-semibold transition-all shadow-sm"
+          >
+            <ImageUp size={15} className="text-indigo-600" />
+            <span>Carica foto della firma</span>
+          </button>
+          <p className="text-[10px] text-slate-400 mt-1 text-center">
+            Una foto viene ripulita automaticamente come una scansione (sfondo trasparente).
+          </p>
+          {uploadError && <p className="text-[10px] text-red-500 mt-1 text-center">{uploadError}</p>}
         </div>
 
         <div className="flex items-center justify-between pt-1">
@@ -179,7 +241,7 @@ export default function SignatureSlot({
               <span>Salva tra i recenti</span>
             </button>
           ) : (
-            <span className="text-[10px] text-slate-400 italic">Disegna sopra per firmare</span>
+            <span className="text-[10px] text-slate-400 italic">Disegna sopra o carica una foto</span>
           )}
 
           {signature.dataUrl && (
@@ -191,7 +253,7 @@ export default function SignatureSlot({
               }}
               className="text-xs font-medium text-red-500 hover:text-red-700 px-2 py-1 transition-colors"
             >
-              Cancella disegno
+              Cancella
             </button>
           )}
         </div>

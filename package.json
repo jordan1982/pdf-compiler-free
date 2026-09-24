@@ -1,7 +1,7 @@
 {
   "name": "pdf-compiler-free",
   "private": true,
-  "homepage": "https://github.com/jordan1982/pdf-compiler-free",
+  "homepage": "https://signflow.igorlabs.dev",
   "version": "0.0.0",
   "type": "module",
   "scripts": {
@@ -10,7 +10,7 @@
     "lint": "oxlint",
     "preview": "vite preview",
     "predeploy": "npm run build",
-    "deploy": "gh-pages -d dist"
+    "deploy": "gh-pages -d dist --cname signflow.igorlabs.dev"
   },
   "dependencies": {
     "canvas-confetti": "^1.9.4",

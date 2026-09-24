@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://signflow.igorlabs.dev/sitemap.xml

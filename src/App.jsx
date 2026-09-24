@@ -18,6 +18,14 @@ import WelcomePage from './components/WelcomePage';
 const SIG_PREFIX = 'sig_';
 const SNAP_THRESHOLD = 1.5;
 
+const getFormattedTodayDate = () => {
+  const today = new Date();
+  const dd = String(today.getDate()).padStart(2, '0');
+  const mm = String(today.getMonth() + 1).padStart(2, '0');
+  const yyyy = today.getFullYear();
+  return `${dd}/${mm}/${yyyy}`;
+};
+
 const makeSignature = (page) => ({
   id: `${SIG_PREFIX}${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
   dataUrl: null,
@@ -66,7 +74,7 @@ export default function App() {
       page: 1,
       x: 10,
       y: 85,
-      value: new Date().toISOString().slice(0, 10),
+      value: getFormattedTodayDate(),
       fontSize: 10,
       bold: false,
       italic: false,
@@ -124,6 +132,14 @@ export default function App() {
   /* Scorciatoie da tastiera */
   useEffect(() => {
     const onKeyDown = (e) => {
+      if (e.key === 'Escape') {
+        setSelectedId(null);
+        if (document.activeElement instanceof HTMLElement) {
+          document.activeElement.blur();
+        }
+        return;
+      }
+
       const isInput = ['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName);
       if (isInput) return;
 
@@ -202,7 +218,6 @@ export default function App() {
         if (e.key === 'ArrowUp') newY -= step;
         if (e.key === 'ArrowDown') newY += step;
 
-        // Transizione verticale tra pagine adiacenti
         if (newY < 0 && newPage > 1) {
           newPage -= 1;
           newY = 100 + newY;
@@ -363,15 +378,36 @@ export default function App() {
   };
 
   /* Gestione Campi Testo */
-  const addCustomField = (label, value = '') => {
+  const addCustomField = (label, customValue = null) => {
     const id = `f_${Date.now()}`;
+    const lowerLabel = label.toLowerCase().trim();
+    const isDateField = lowerLabel.includes('data');
+
+    let initialValue = customValue;
+
+    if (initialValue === null) {
+      if (isDateField) {
+        initialValue = getFormattedTodayDate();
+      } else if (lowerLabel.includes('nome') && !lowerLabel.includes('cognome') && signerInfo?.nome) {
+        initialValue = signerInfo.nome;
+      } else if (lowerLabel.includes('cognome') && signerInfo?.cognome) {
+        initialValue = signerInfo.cognome;
+      } else if ((lowerLabel.includes('codice fiscale') || lowerLabel === 'cf') && signerInfo?.cf) {
+        initialValue = signerInfo.cf;
+      } else if (lowerLabel.includes('email') && signerInfo?.email) {
+        initialValue = signerInfo.email;
+      } else {
+        initialValue = ''; // Lascia il campo vuoto pronto per l'inserimento
+      }
+    }
+
     const newField = {
       id,
       label,
       page: currentPage,
       x: 40,
       y: 50,
-      value,
+      value: initialValue,
       fontSize: 10,
       bold: false,
       italic: false,
@@ -385,7 +421,7 @@ export default function App() {
   const handleAddField = (e) => {
     e.preventDefault();
     if (!newFieldName.trim()) return;
-    addCustomField(newFieldName.trim(), '');
+    addCustomField(newFieldName.trim());
     setNewFieldName('');
   };
 
@@ -704,6 +740,7 @@ export default function App() {
                       <span><strong>Shift + Frecce:</strong> Spostamento rapido</span>
                       <span><strong>Ctrl+C / Ctrl+V:</strong> Copia e Incolla</span>
                       <span><strong>Canc / Backspace:</strong> Elimina selezionato</span>
+                      <span><strong>Esc:</strong> Deseleziona</span>
                       <span><strong>Ctrl+Z / Ctrl+Y:</strong> Annulla / Ripristina</span>
                     </div>
                   </div>
