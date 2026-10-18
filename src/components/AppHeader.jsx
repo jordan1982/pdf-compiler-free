@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Undo, Redo, UserCheck } from 'lucide-react';
+import { Undo, Redo, UserCheck, History } from 'lucide-react';
 import SignerModal from './SignerModal';
-
+import ChangelogModal from './ChangelogModal';
+import { CURRENT_VERSION } from './ChangelogModal';
 export default function AppHeader({ 
   pdfBytes, 
   undoFields, 
@@ -11,7 +12,8 @@ export default function AppHeader({
   signerInfo,
   onSaveSignerInfo
 }) {
-  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isSignerModalOpen, setIsSignerModalOpen] = useState(false);
+  const [isChangelogOpen, setIsChangelogOpen] = useState(false);
 
   return (
     <>
@@ -25,9 +27,21 @@ export default function AppHeader({
 
         {/* Controlli sulla Destra */}
         <div className={`flex items-center gap-2 ${!pdfBytes ? 'absolute right-0 top-0 bottom-0 my-auto' : ''}`}>
+          {/* Pulsante Changelog */}
+          <button
+            onClick={() => setIsChangelogOpen(true)}
+            className="p-2 bg-white border border-slate-200 rounded-xl text-slate-600 hover:bg-slate-100 transition-colors shadow-sm flex items-center gap-1.5"
+            title="Vedi cronologia versioni"
+          >
+            <History size={16} className="text-indigo-600" />
+            <span className="hidden sm:inline text-xs font-semibold text-slate-700">
+              {CURRENT_VERSION}
+            </span>
+          </button>
+
           {/* Pulsante Profilo Firmatario */}
           <button
-            onClick={() => setIsModalOpen(true)}
+            onClick={() => setIsSignerModalOpen(true)}
             className="p-2 bg-white border border-slate-200 rounded-xl text-slate-600 hover:bg-slate-100 transition-colors shadow-sm flex items-center gap-1.5"
             title="Gestisci dati firmatario"
           >
@@ -63,10 +77,16 @@ export default function AppHeader({
 
       {/* Modal Gestione Dati */}
       <SignerModal
-        isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
+        isOpen={isSignerModalOpen}
+        onClose={() => setIsSignerModalOpen(false)}
         signerInfo={signerInfo}
         onSave={onSaveSignerInfo}
+      />
+
+      {/* Modal Changelog */}
+      <ChangelogModal
+        isOpen={isChangelogOpen}
+        onClose={() => setIsChangelogOpen(false)}
       />
     </>
   );

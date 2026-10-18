@@ -1,5 +1,5 @@
 import React from 'react';
-import { Plus, Calendar } from 'lucide-react';
+import { Plus, Calendar, CheckSquare } from 'lucide-react';
 import FieldRow from './FieldRow';
 
 export default function FieldSection({
@@ -14,8 +14,8 @@ export default function FieldSection({
   updateField,
   removeField,
   duplicateField,
+  onAddCheckbox, // Passato da App.jsx
 }) {
-  // Formatta la data in formato italiano GG/MM/AAAA
   const getTodayDate = () => {
     const today = new Date();
     const dd = String(today.getDate()).padStart(2, '0');
@@ -26,18 +26,14 @@ export default function FieldSection({
 
   const handleApplyTodayDate = () => {
     const todayStr = getTodayDate();
-
-    // 1. Cerca un campo "Data" esistente
     const targetField =
       fields.find((f) => f.id === selectedId && (f.id === 'data' || f.label.toLowerCase().includes('data'))) ||
       fields.find((f) => f.id === 'data' || f.label.toLowerCase().includes('data'));
 
     if (targetField) {
-      // Se il campo esiste già, aggiorna il VALORE del testo
       updateField(targetField.id, 'value', todayStr);
       setSelectedId(targetField.id);
     } else {
-      // Se non esiste, precompila il nome come "Data"
       setNewFieldName('Data');
     }
   };
@@ -73,9 +69,9 @@ export default function FieldSection({
           </button>
         </div>
 
-        {/* Scorciatoia Data */}
-        <div className="flex items-center gap-2 pt-1">
-          <span className="text-[10px] text-slate-400 font-medium">Scorciatoia:</span>
+        {/* Scorciatoie Data e Crocetta X */}
+        <div className="flex flex-wrap items-center gap-2 pt-1">
+          <span className="text-[10px] text-slate-400 font-medium">Scorciatoie:</span>
           <button
             type="button"
             onClick={handleApplyTodayDate}
@@ -83,7 +79,17 @@ export default function FieldSection({
             title="Imposta la data di oggi sul campo Data"
           >
             <Calendar size={13} />
-            <span>Inserisci data di oggi</span>
+            <span>Inserisci data</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={onAddCheckbox}
+            className="inline-flex items-center gap-1.5 text-[11px] font-medium bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200/60 px-2.5 py-1 rounded-lg transition-colors"
+            title="Crea una crocetta [X] pre-allineata per le caselle di spunta"
+          >
+            <CheckSquare size={13} />
+            <span>Crocetta [X]</span>
           </button>
         </div>
       </form>

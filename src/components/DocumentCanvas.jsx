@@ -12,6 +12,7 @@ export default function DocumentCanvas({
   snapLines,
   fields,
   signatures,
+  redactions = [],
   selectedId,
   draggingId,
   fontPxFor,
@@ -23,7 +24,6 @@ export default function DocumentCanvas({
 }) {
   const containerRef = useRef(null);
 
-  // Rilevamento automatico della pagina visibile in modalità continua
   useEffect(() => {
     if (viewMode !== 'continuous' || !containerRef.current || !onPageChange) return;
 
@@ -36,10 +36,7 @@ export default function DocumentCanvas({
           }
         });
       },
-      {
-        root: containerRef.current,
-        threshold: 0.5,
-      }
+      { root: containerRef.current, threshold: 0.5 }
     );
 
     const elements = containerRef.current.querySelectorAll('[data-page]');
@@ -57,21 +54,20 @@ export default function DocumentCanvas({
   return (
     <div
       ref={containerRef}
-      className="border border-slate-200 rounded-2xl overflow-auto shadow-inner bg-slate-200/60 h-[65vh] lg:h-[72vh] relative p-4 space-y-6"
+      className="border border-slate-200 rounded-2xl overflow-auto shadow-inner bg-slate-200/60 h-[65vh] lg:h-[72vh] relative p-4 space-y-6 select-none"
     >
       {pagesToRender.map((pageNum) => {
         const fieldsOnPage = fields.filter((f) => f.page === pageNum);
         const signaturesOnPage = signatures.filter((s) => s.page === pageNum);
+        const redactionsOnPage = redactions.filter((r) => r.page === pageNum);
 
         return (
           <div
             key={pageNum}
             data-page={pageNum}
             ref={pageNum === currentPage ? pageRef : null}
-            onMouseMove={handlePointerMove}
-            onTouchMove={handlePointerMove}
-            onMouseUp={handlePointerUp}
-            onTouchEnd={handlePointerUp}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
             onClick={(e) => {
               e.stopPropagation();
               if (onPageChange && pageNum !== currentPage) onPageChange(pageNum);
@@ -86,14 +82,13 @@ export default function DocumentCanvas({
               draggable={false}
             />
 
-            {/* Indicatori Numero Pagina in Scorrimento Continuo */}
             {viewMode === 'continuous' && (
               <div className="absolute top-2 right-2 bg-slate-900/60 text-white text-[10px] font-semibold px-2 py-0.5 rounded-md pointer-events-none backdrop-blur-sm z-20">
                 Pagina {pageNum}
               </div>
             )}
 
-            {/* Linee Guida Snapping (mostrate sulla pagina corrente) */}
+            {/* Linee Guida Snapping */}
             {pageNum === currentPage && snapLines.x !== null && (
               <div
                 className="absolute top-0 bottom-0 border-l border-dashed border-indigo-500 z-30 pointer-events-none"
@@ -107,7 +102,40 @@ export default function DocumentCanvas({
               />
             )}
 
-            {/* Overlay Campi */}
+            {/* Overlay Rettangoli di Copertura (disegnati sotto i testi e le firme) */}
+            {redactionsOnPage.map((red) => {
+              const isSelected = selectedId === red.id;
+              const isDragging = draggingId === red.id;
+
+              return (
+                <div
+                  key={red.id}
+                  onPointerDown={(e) => handlePointerDown(red.id, e)}
+                  style={{
+                    left: `${red.x}%`,
+                    top: `${red.y}%`,
+                    width: `${red.widthPct || 15}%`,
+                    height: `${red.heightPct || 5}%`,
+                    backgroundColor: red.color || '#FFFFFF',
+                  }}
+                  className={`absolute rounded-sm border cursor-move z-10 transition-shadow ${
+                    isSelected
+                      ? 'ring-2 ring-indigo-500 border-indigo-400 shadow-md'
+                      : 'border-slate-300/80 hover:border-slate-400'
+                  } ${isDragging ? 'opacity-80' : ''}`}
+                >
+                  {/* Handle Ridimensionamento in basso a destra */}
+                  {isSelected && (
+                    <div
+                      onPointerDown={(e) => handleResizeStart(red.id, e)}
+                      className="absolute -bottom-1.5 -right-1.5 w-3.5 h-3.5 bg-indigo-600 rounded-full border-2 border-white cursor-se-resize shadow-md"
+                    />
+                  )}
+                </div>
+              );
+            })}
+
+            {/* Overlay Campi Testo */}
             {fieldsOnPage.map((field) => (
               <FieldOverlay
                 key={field.id}

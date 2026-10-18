@@ -11,11 +11,14 @@ import AppHeader from './components/AppHeader';
 import DocumentCanvas from './components/DocumentCanvas';
 import FieldSection from './components/FieldSection';
 import SignatureSection from './components/SignatureSection';
+import RedactionSection from './components/RedactionSection';
 import ExportActions from './components/ExportActions';
 import PageToolbar from './components/PageToolbar';
 import WelcomePage from './components/WelcomePage';
+import PdfLoaderOverlay from './components/PdfLoaderOverlay';
 
 const SIG_PREFIX = 'sig_';
+const RED_PREFIX = 'red_';
 const SNAP_THRESHOLD = 1.5;
 
 const getFormattedTodayDate = () => {
@@ -35,6 +38,16 @@ const makeSignature = (page) => ({
   widthPct: 22,
 });
 
+const makeRedaction = (page) => ({
+  id: `${RED_PREFIX}${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+  page,
+  x: 40,
+  y: 45,
+  widthPct: 20,
+  heightPct: 5,
+  color: '#FFFFFF',
+});
+
 pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
 
 export default function App() {
@@ -46,6 +59,7 @@ export default function App() {
   const [pageSizes, setPageSizes] = useState({});
   const [errorMessage, setErrorMessage] = useState('');
   const [isLoadingPdf, setIsLoadingPdf] = useState(false);
+  const [fileSizeMB, setFileSizeMB] = useState(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isDesktop, setIsDesktop] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(1.4);
@@ -85,6 +99,7 @@ export default function App() {
 
   const [newFieldName, setNewFieldName] = useState('');
   const [signatures, setSignatures] = useState([makeSignature(1)]);
+  const [redactions, setRedactions] = useState([]);
   const [copiedElement, setCopiedElement] = useState(null);
   const [snapLines, setSnapLines] = useState({ x: null, y: null });
 
@@ -159,6 +174,8 @@ export default function App() {
         e.preventDefault();
         if (selectedId.startsWith(SIG_PREFIX)) {
           removeSignature(selectedId);
+        } else if (selectedId.startsWith(RED_PREFIX)) {
+          removeRedaction(selectedId);
         } else {
           removeField(selectedId);
         }
@@ -170,6 +187,9 @@ export default function App() {
         if (selectedId.startsWith(SIG_PREFIX)) {
           const sig = signatures.find((s) => s.id === selectedId);
           if (sig) setCopiedElement({ type: 'signature', data: sig });
+        } else if (selectedId.startsWith(RED_PREFIX)) {
+          const red = redactions.find((r) => r.id === selectedId);
+          if (red) setCopiedElement({ type: 'redaction', data: red });
         } else {
           const field = fields.find((f) => f.id === selectedId);
           if (field) setCopiedElement({ type: 'field', data: field });
@@ -198,6 +218,16 @@ export default function App() {
             y: clamp(copiedElement.data.y + 3, 0, 100),
           };
           setSignatures((prev) => [...prev, copy]);
+          setSelectedId(copy.id);
+        } else if (copiedElement.type === 'redaction') {
+          const copy = {
+            ...copiedElement.data,
+            id: `${RED_PREFIX}${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+            page: currentPage,
+            x: clamp(copiedElement.data.x + 3, 0, 100),
+            y: clamp(copiedElement.data.y + 3, 0, 100),
+          };
+          setRedactions((prev) => [...prev, copy]);
           setSelectedId(copy.id);
         }
         return;
@@ -240,6 +270,10 @@ export default function App() {
         setSignatures((prev) =>
           prev.map((s) => (s.id === selectedId ? updateItemPosition(s) : s))
         );
+      } else if (selectedId.startsWith(RED_PREFIX)) {
+        setRedactions((prev) =>
+          prev.map((r) => (r.id === selectedId ? updateItemPosition(r) : r))
+        );
       } else {
         setFields(
           fields.map((f) => (f.id === selectedId ? updateItemPosition(f) : f))
@@ -249,27 +283,33 @@ export default function App() {
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [selectedId, fields, signatures, copiedElement, currentPage, numPages, undoFields, redoFields, setFields]);
+  }, [selectedId, fields, signatures, redactions, copiedElement, currentPage, numPages, undoFields, redoFields, setFields]);
 
   const currentPageSize = pageSizes[currentPage];
 
   /* Handlers PDF */
-  const handleFileUpload = async (e) => {
-    const file = e.target.files[0];
+  const handleFileUpload = (e) => {
+    const file = e?.target?.files ? e.target.files[0] : e;
     if (!file || file.type !== 'application/pdf') return;
+
     setErrorMessage('');
+    const sizeMB = (file.size / (1024 * 1024)).toFixed(1);
+    setFileSizeMB(sizeMB);
     setIsLoadingPdf(true);
-    try {
-      const buffer = await file.arrayBuffer();
-      setPdfName(file.name);
-      setPdfBytes(buffer);
-      await renderAllPages(buffer, 1);
-    } catch (err) {
-      console.error(err);
-      setErrorMessage('Errore durante la lettura del PDF.');
-    } finally {
-      setIsLoadingPdf(false);
-    }
+
+    setTimeout(async () => {
+      try {
+        const buffer = await file.arrayBuffer();
+        setPdfName(file.name);
+        setPdfBytes(buffer);
+        await renderAllPages(buffer, 1);
+      } catch (err) {
+        console.error(err);
+        setErrorMessage('Errore durante la lettura del PDF.');
+      } finally {
+        setIsLoadingPdf(false);
+      }
+    }, 50);
   };
 
   const renderAllPages = async (arrayBuffer, initialPage = 1) => {
@@ -316,6 +356,9 @@ export default function App() {
       setSignatures((prev) =>
         prev.map((s) => (s.page > currentPage ? { ...s, page: s.page + 1 } : s))
       );
+      setRedactions((prev) =>
+        prev.map((r) => (r.page > currentPage ? { ...r, page: r.page + 1 } : r))
+      );
 
       await renderAllPages(newBuffer, currentPage + 1);
     } catch (err) {
@@ -356,6 +399,11 @@ export default function App() {
           .filter((s) => s.page !== targetPage)
           .map((s) => (s.page > targetPage ? { ...s, page: s.page - 1 } : s))
       );
+      setRedactions((prev) =>
+        prev
+          .filter((r) => r.page !== targetPage)
+          .map((r) => (r.page > targetPage ? { ...r, page: r.page - 1 } : r))
+      );
 
       const targetRenderPage = Math.min(targetPage, numPages - 1);
       await renderAllPages(newBuffer, targetRenderPage);
@@ -375,6 +423,7 @@ export default function App() {
     setNumPages(0);
     setCurrentPage(1);
     setErrorMessage('');
+    setFileSizeMB(null);
   };
 
   /* Gestione Campi Testo */
@@ -397,7 +446,7 @@ export default function App() {
       } else if (lowerLabel.includes('email') && signerInfo?.email) {
         initialValue = signerInfo.email;
       } else {
-        initialValue = ''; // Lascia il campo vuoto pronto per l'inserimento
+        initialValue = '';
       }
     }
 
@@ -415,6 +464,26 @@ export default function App() {
       color: '#000000',
     };
     setFields([...fields, newField]);
+    setSelectedId(id);
+  };
+
+  /* Preset Crocetta [X] per caselle di spunta */
+  const addCheckboxField = () => {
+    const id = `f_check_${Date.now()}`;
+    const newCheckbox = {
+      id,
+      label: 'Crocetta',
+      page: currentPage,
+      x: 45,
+      y: 45,
+      value: 'X',
+      fontSize: 11,
+      bold: true,
+      italic: false,
+      underline: false,
+      color: '#000000',
+    };
+    setFields([...fields, newCheckbox]);
     setSelectedId(id);
   };
 
@@ -446,6 +515,35 @@ export default function App() {
 
   const updateField = (id, key, val) => {
     setFields(fields.map((f) => (f.id === id ? { ...f, [key]: val } : f)));
+  };
+
+  /* Gestione Rettangoli Cancellazione / Sbianchettamento */
+  const addRedaction = () => {
+    const red = makeRedaction(currentPage);
+    setRedactions((prev) => [...prev, red]);
+    setSelectedId(red.id);
+  };
+
+  const removeRedaction = (id) => {
+    setRedactions((prev) => prev.filter((r) => r.id !== id));
+    if (selectedId === id) setSelectedId(null);
+  };
+
+  const duplicateRedaction = (id) => {
+    const source = redactions.find((r) => r.id === id);
+    if (!source) return;
+    const copy = {
+      ...source,
+      id: `${RED_PREFIX}${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      x: clamp(source.x + 3, 0, 100),
+      y: clamp(source.y + 3, 0, 100),
+    };
+    setRedactions((prev) => [...prev, copy]);
+    setSelectedId(copy.id);
+  };
+
+  const updateRedaction = (id, key, val) => {
+    setRedactions((prev) => prev.map((r) => (r.id === id ? { ...r, [key]: val } : r)));
   };
 
   /* Dragging & Snapping */
@@ -510,7 +608,11 @@ export default function App() {
 
       setSnapLines({ x: activeSnapX, y: activeSnapY });
 
-      if (draggingId.startsWith(SIG_PREFIX)) {
+      if (draggingId.startsWith(RED_PREFIX)) {
+        setRedactions((prev) =>
+          prev.map((r) => (r.id === draggingId ? { ...r, page: targetPageNum, x, y } : r))
+        );
+      } else if (draggingId.startsWith(SIG_PREFIX)) {
         setSignatures((prev) =>
           prev.map((s) => (s.id === draggingId ? { ...s, page: targetPageNum, x, y } : s))
         );
@@ -521,7 +623,17 @@ export default function App() {
       }
     } else if (resizingId) {
       e.preventDefault();
-      if (resizingId.startsWith(SIG_PREFIX)) {
+      if (resizingId.startsWith(RED_PREFIX)) {
+        const red = redactions.find((r) => r.id === resizingId);
+        if (!red) return;
+        const currentX = (red.x / 100) * rect.width;
+        const currentY = (red.y / 100) * rect.height;
+        const newWidthPct = clamp(((clientX - (rect.left + currentX)) / rect.width) * 100, 3, 90);
+        const newHeightPct = clamp(((clientY - (rect.top + currentY)) / rect.height) * 100, 1, 90);
+        setRedactions((prev) =>
+          prev.map((r) => (r.id === resizingId ? { ...r, widthPct: newWidthPct, heightPct: newHeightPct } : r))
+        );
+      } else if (resizingId.startsWith(SIG_PREFIX)) {
         const sig = signatures.find((s) => s.id === resizingId);
         if (!sig) return;
         const currentX = (sig.x / 100) * rect.width;
@@ -594,7 +706,7 @@ export default function App() {
     setErrorMessage('');
     setIsGenerating(true);
     try {
-      await buildPdf({ pdfBytes, fields, signatures, pdfName });
+      await buildPdf({ pdfBytes, fields, signatures, redactions, pdfName });
     } catch (err) {
       console.error(err);
       setErrorMessage('Errore imprevisto durante la generazione del PDF.');
@@ -605,6 +717,7 @@ export default function App() {
 
   const fieldsOnPage = fields.filter((f) => f.page === currentPage);
   const signaturesOnPage = signatures.filter((s) => s.page === currentPage);
+  const redactionsOnPage = redactions.filter((r) => r.page === currentPage);
 
   const exportCurrentPageAsImage = () => {
     if (!pageRef.current) return;
@@ -621,6 +734,17 @@ export default function App() {
 
     const scaleX = canvas.width / 100;
     const scaleY = canvas.height / 100;
+
+    // Disegna prima i rettangoli di copertura
+    redactionsOnPage.forEach((r) => {
+      const x = r.x * scaleX;
+      const y = r.y * scaleY;
+      const w = (r.widthPct || 15) * scaleX;
+      const h = (r.heightPct || 5) * scaleY;
+
+      ctx.fillStyle = r.color || '#FFFFFF';
+      ctx.fillRect(x, y, w, h);
+    });
 
     fieldsOnPage.forEach((f) => {
       const x = f.x * scaleX;
@@ -678,6 +802,9 @@ export default function App() {
       className="min-h-screen bg-slate-50 p-3 sm:p-6 max-w-7xl mx-auto font-sans pb-16 text-slate-800"
       onClick={() => setSelectedId(null)}
     >
+      {/* Overlay di caricamento PDF */}
+      {isLoadingPdf && <PdfLoaderOverlay fileSizeMB={fileSizeMB} />}
+
       <AppHeader
         pdfBytes={pdfBytes}
         undoFields={undoFields}
@@ -757,6 +884,7 @@ export default function App() {
                 snapLines={snapLines}
                 fields={fields}
                 signatures={signatures}
+                redactions={redactions}
                 selectedId={selectedId}
                 draggingId={draggingId}
                 fontPxFor={fontPxFor}
@@ -781,6 +909,7 @@ export default function App() {
                 updateField={updateField}
                 removeField={removeField}
                 duplicateField={duplicateField}
+                onAddCheckbox={addCheckboxField}
               />
 
               <SignatureSection
@@ -799,6 +928,17 @@ export default function App() {
                   newSig.dataUrl = sigUrl;
                   setSignatures((prev) => [...prev, newSig]);
                 }}
+              />
+
+              <RedactionSection
+                redactions={redactions}
+                numPages={numPages}
+                selectedId={selectedId}
+                onAddRedaction={addRedaction}
+                setSelectedId={setSelectedId}
+                updateRedaction={updateRedaction}
+                removeRedaction={removeRedaction}
+                duplicateRedaction={duplicateRedaction}
               />
 
               <ExportActions

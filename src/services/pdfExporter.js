@@ -2,10 +2,10 @@ import { PDFDocument, StandardFonts, rgb, degrees } from 'pdf-lib';
 import { CAP_HEIGHT_RATIO } from '../utils';
 
 const hexToRgb = (hex) => {
-  const cleanHex = (hex || '#000000').replace('#', '');
+  const cleanHex = (hex || '#FFFFFF').replace('#', '');
   const r = parseInt(cleanHex.substring(0, 2), 16) / 255 || 0;
   const g = parseInt(cleanHex.substring(2, 4), 16) / 255 || 0;
-  const b = parseInt(cleanHex.substring(4, 6), 16) / 255 || 0;
+  const b = parseInt(cleanHex.substring(2, 4), 16) / 255 || 0;
   return rgb(r, g, b);
 };
 
@@ -33,36 +33,20 @@ function getVisualPageSize(box, rotation) {
     : { visualWidth: box.width, visualHeight: box.height };
 }
 
-/**
- * Mappa una coordinata dallo spazio VISIVO (0,0 in Top-Left, Y verso il basso)
- * allo spazio NATIVO PDF del MediaBox/CropBox (Y verso l'alto).
- */
 function visualPointToRaw(xVisual, yVisual, box, rotation) {
   switch (rotation) {
     case 90:
-      return {
-        x: box.left + yVisual,
-        y: box.bottom + xVisual,
-      };
+      return { x: box.left + yVisual, y: box.bottom + xVisual };
     case 180:
-      return {
-        x: box.right - xVisual,
-        y: box.bottom + yVisual,
-      };
+      return { x: box.right - xVisual, y: box.bottom + yVisual };
     case 270:
-      return {
-        x: box.right - yVisual,
-        y: box.top - xVisual,
-      };
+      return { x: box.right - yVisual, y: box.top - xVisual };
     default:
-      return {
-        x: box.left + xVisual,
-        y: box.top - yVisual,
-      };
+      return { x: box.left + xVisual, y: box.top - yVisual };
   }
 }
 
-export const buildPdf = async ({ pdfBytes, fields, signatures, pdfName }) => {
+export const buildPdf = async ({ pdfBytes, fields, signatures, redactions = [], pdfName }) => {
   if (!pdfBytes) throw new Error('Nessun documento PDF valido caricato.');
 
   const pdfDoc = await PDFDocument.load(pdfBytes);
@@ -81,7 +65,57 @@ export const buildPdf = async ({ pdfBytes, fields, signatures, pdfName }) => {
     return fontCache[type];
   };
 
-  // 1. Rendering Campi di Testo
+  // 1. Rendering Rettangoli di Copertura (100% Opachi e disposti sotto i testi)
+  for (const red of redactions) {
+    const page = pages[red.page - 1];
+    if (!page) continue;
+
+    const box = getPageBox(page);
+    const rotation = normalizeRotation(page);
+    const { visualWidth, visualHeight } = getVisualPageSize(box, rotation);
+
+    const xVisual = (red.x / 100) * visualWidth;
+    const yVisual = (red.y / 100) * visualHeight;
+    const wVisual = ((red.widthPct || 15) / 100) * visualWidth;
+    const hVisual = ((red.heightPct || 5) / 100) * visualHeight;
+
+    let drawX, drawY;
+
+    switch (rotation) {
+      case 90:
+        drawX = box.left + yVisual;
+        drawY = box.bottom + xVisual;
+        break;
+      case 180:
+        drawX = box.right - xVisual - wVisual;
+        drawY = box.bottom + yVisual;
+        break;
+      case 270:
+        drawX = box.right - yVisual - hVisual;
+        drawY = box.top - xVisual - wVisual;
+        break;
+      default: // 0°
+        drawX = box.left + xVisual;
+        drawY = box.top - yVisual - hVisual;
+        break;
+    }
+
+    const rectColor = hexToRgb(red.color || '#FFFFFF');
+
+    page.drawRectangle({
+      x: drawX,
+      y: drawY,
+      width: wVisual,
+      height: hVisual,
+      color: rectColor,
+      borderColor: rectColor,
+      borderWidth: 0.5,
+      opacity: 1,
+      rotate: rotation ? degrees(rotation) : undefined,
+    });
+  }
+
+  // 2. Rendering Campi di Testo (Allineamento Millimetrico per X e Marcatura)
   for (const field of fields) {
     if (!field.value) continue;
     const page = pages[field.page - 1];
@@ -98,9 +132,15 @@ export const buildPdf = async ({ pdfBytes, fields, signatures, pdfName }) => {
 
     const xVisual = (field.x / 100) * visualWidth;
     const topYVisual = (field.y / 100) * visualHeight;
-    const baselineYVisual = topYVisual + fontSize * CAP_HEIGHT_RATIO;
 
-    const { x, y } = visualPointToRaw(xVisual, baselineYVisual, box, rotation);
+    // COMPENSAZIONE ALLINEAMENTO MATEMATICO:
+    // +0.25 pt su X per annullare il padding di React
+    // CapHeight * 0.78 su Y per portare il top-box esattamente alla baseline PDF
+    const calibratedX = xVisual + 0.25;
+    const capRatio = CAP_HEIGHT_RATIO || 0.7;
+    const baselineYVisual = topYVisual + (fontSize * capRatio);
+
+    const { x, y } = visualPointToRaw(calibratedX, baselineYVisual, box, rotation);
 
     page.drawText(String(field.value), {
       x,
@@ -116,7 +156,7 @@ export const buildPdf = async ({ pdfBytes, fields, signatures, pdfName }) => {
       const thickness = Math.max(0.5, fontSize * 0.06);
       const underlineYVisual = baselineYVisual + fontSize * 0.12;
 
-      const { x: ux, y: uy } = visualPointToRaw(xVisual, underlineYVisual, box, rotation);
+      const { x: ux, y: uy } = visualPointToRaw(calibratedX, underlineYVisual, box, rotation);
 
       page.drawRectangle({
         x: ux,
@@ -129,7 +169,7 @@ export const buildPdf = async ({ pdfBytes, fields, signatures, pdfName }) => {
     }
   }
 
-// 2. Rendering Firme e Timbri
+  // 3. Rendering Firme e Timbri
   for (const sig of signatures) {
     if (!sig.dataUrl) continue;
     const page = pages[sig.page - 1];
@@ -151,7 +191,6 @@ export const buildPdf = async ({ pdfBytes, fields, signatures, pdfName }) => {
 
     let drawX, drawY;
 
-    // Compensazione esatta per geometria di pagina e perno di rotazione pdf-lib
     switch (rotation) {
       case 90:
         drawX = box.left + yVisual + heightPtVisual;

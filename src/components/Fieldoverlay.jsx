@@ -13,12 +13,12 @@ export default function FieldOverlay({ field, fontPx, selected, dragging, onPoin
       dragging={dragging}
       onPointerDown={onPointerDown}
       onResizeStart={onResizeStart}
-      className="px-1 whitespace-normal break-words overflow-hidden"
-      style={{ fontSize: `${fontPx}px`, lineHeight: 1.2, paddingTop: 0, paddingBottom: 0 }}
+      className="p-0 border-0 bg-transparent overflow-visible leading-none"
+      style={{ fontSize: `${fontPx}px`, lineHeight: 1, paddingTop: 0, paddingBottom: 0 }}
     >
       <span
         style={{ color: field.color || '#000000' }}
-        className={`${field.bold ? 'font-bold' : ''} ${field.italic ? 'italic' : ''} ${field.underline ? 'underline' : ''}`}
+        className={`inline-block select-none ${field.bold ? 'font-bold' : ''} ${field.italic ? 'italic' : ''} ${field.underline ? 'underline' : ''}`}
       >
         {field.value || `[${field.label}]`}
       </span>
