@@ -1,9 +1,10 @@
 <!doctype html>
-<html lang="en">
+<html lang="it">
 
 <head>
   <meta charset="UTF-8" />
-  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+
+  <!-- <link rel="manifest" href="/manifest.webmanifest" /> -->
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>SignFlow | PDF Editor & Sign Free</title>
   <meta name="description"
@@ -12,13 +13,29 @@
   <script type='module' src='https://static.cloudflareinsights.com/beacon.min.js'
     data-cf-beacon='{"token": "3db068af07ac4b5d98cae62634760599"}'></script>
   <!-- End Cloudflare Web Analytics -->
-  <script type="module" crossorigin src="/assets/index-OVQOaJxN.js"></script>
-  <link rel="stylesheet" crossorigin href="/assets/index-DdRYevHX.css">
+
+<!-- Favicon e Icone con percorsi assoluti per Vite -->
+  <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+  <link rel="icon" type="image/png" sizes="32x32" href="/icon-192.png" />
+  <link rel="apple-touch-icon" href="/icon-192.png" />
+
+  <!-- Manifest PWA -->
+  <link rel="manifest" href="/manifest.json" />
+  <script type="module" crossorigin src="/assets/index-B-hG4CBD.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-DcxtUiP9.css">
 </head>
 
 <body>
   <div id="root"></div>
-
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('/sw.js').catch((err) => {
+          console.log('SW registration failed: ', err);
+        });
+      });
+    }
+  </script>
 </body>
 
 </html>
