@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://signflow.igorlabs.dev/sitemap.xml
+Sitemap: https://scanarmor.igorlabs.dev/sitemap.xml

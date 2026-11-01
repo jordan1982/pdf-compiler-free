@@ -1,4 +1,4 @@
-const CACHE_NAME = 'signflow-v1.6.0-cache';
+const CACHE_NAME = 'scanarmor-v1.6.0-cache';
 
 self.addEventListener('install', (event) => {
   self.skipWaiting();
